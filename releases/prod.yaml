@@ -1,0 +1,52 @@
+# Production release manifest (authoritative)
+# Pin *everything* that is deployed so we can answer "what's running?" instantly.
+
+env: prod
+created: 2026-01-19
+
+website:
+  repo: dogcodeboy/motorcade.vip
+  theme:
+    name: motorcade-trust
+    checkpoint: 2026-01-18-36v-services-stable
+  plugins:
+    baseline:
+      forms: TBD
+      smtp: TBD
+      security: TBD
+  nginx_frontend_cutover:
+    enabled: false
+    static_root: /var/www/motorcade_static
+
+platform:
+  postgres:
+    mode: container_phase1
+    version: "16"
+  services:
+    lead_intake_api:
+      image: TBD
+      tag: TBD
+      health: /healthz
+    people_api:
+      image: TBD
+      tag: TBD
+      health: /healthz
+    notify:
+      image: TBD
+      tag: TBD
+
+identity:
+  keycloak:
+    enabled: false
+    image: quay.io/keycloak/keycloak
+    tag: TBD
+  freeipa:
+    enabled: false
+    image: TBD
+    tag: TBD
+
+mail:
+  mailcow:
+    enabled: false
+    version: TBD
+    hostname: mail.motorcade.vip
