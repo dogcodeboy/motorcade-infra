@@ -1,0 +1,21 @@
+---
+# PLAT_01B — Temporary static Podman runtime bootstrap.
+# Source: https://github.com/mgoltzsche/podman-static (static binaries + deps)
+mc_podman_static_version: "latest"   # "latest" or tag like "v5.7.1"
+mc_podman_static_arch: "amd64"       # amd64 for x86_64, arm64 for aarch64
+mc_podman_static_tmp_dir: "/tmp/mc_podman_static"
+# Download URL pattern (latest or versioned)
+mc_podman_static_url_latest: "https://github.com/mgoltzsche/podman-static/releases/latest/download/podman-linux-{{ mc_podman_static_arch }}.tar.gz"
+mc_podman_static_url_versioned: "https://github.com/mgoltzsche/podman-static/releases/download/{{ mc_podman_static_version }}/podman-linux-{{ mc_podman_static_arch }}.tar.gz"
+
+# Whether to create a docker->podman symlink in /usr/local/bin for compatibility
+mc_enable_docker_symlink: false
+
+# Rootless enablement (recommended for end-goal). Requires uidmap and subuid/subgid mappings.
+mc_enable_rootless: false
+mc_rootless_user: "mc_podman"
+mc_rootless_subuid_start: 100000
+mc_rootless_subuid_count: 200000
+
+# Storage backend preference: leave as provided by bundle; optionally force vfs for maximum compatibility.
+mc_force_storage_vfs: false

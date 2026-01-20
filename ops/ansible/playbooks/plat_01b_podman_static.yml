@@ -1,0 +1,11 @@
+---
+- name: PLAT_01B — Podman Static (Temporary Unblocker)
+  hosts: motorcade_platform
+  become: true
+
+  roles:
+    # Fix for: netavark: iptables: No such file or directory
+    - role: mc_iptables
+
+    # Existing role from your PLAT_01B static bundle
+    - role: podman_static

@@ -1,0 +1,26 @@
+---
+# Temporary source-build path when AL2023 repos do not provide podman packages.
+# This is meant to unblock the platform spine and is reversible later.
+
+mc_podman_version: "v5.7.1"
+mc_conmon_version: "v2.2.0"
+
+# Where source builds live on target
+mc_src_root: "/opt/motorcade/src"
+mc_build_root: "/opt/motorcade/build"
+
+# Install prefix
+mc_prefix: "/usr/local"
+
+# Runtime user used elsewhere in PLAT_01
+mc_runtime_user: "motorcade"
+
+# Temporary storage driver (avoids fuse-overlayfs dependency):
+# - vfs works everywhere, slower but reliable.
+# - overlay requires fuse-overlayfs for rootless on many distros.
+mc_storage_driver: "vfs"
+
+# Optional: install runc binary from upstream if not present via dnf.
+mc_runc_install: true
+mc_runc_version: "v1.3.0"   # override as desired
+mc_runc_arch: "amd64"       # amd64|arm64

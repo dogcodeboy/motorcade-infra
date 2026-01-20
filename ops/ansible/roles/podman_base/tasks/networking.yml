@@ -1,0 +1,5 @@
+---
+- name: Ensure slirp4netns is available
+  command: slirp4netns --version
+  register: slirp_check
+  changed_when: false

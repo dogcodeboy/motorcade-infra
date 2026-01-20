@@ -1,0 +1,16 @@
+---
+- name: Add upstream Podman repo (TEMPORARY – Fedora 39)
+  copy:
+    dest: /etc/yum.repos.d/podman-upstream.repo
+    content: |
+      [podman-upstream]
+      name=Podman Upstream (Temporary, Fedora 39)
+      baseurl=https://download.copr.fedorainfracloud.org/results/rhcontainerbot/podman/fedora-39-x86_64/
+      enabled=1
+      gpgcheck=1
+      gpgkey=https://download.copr.fedorainfracloud.org/results/rhcontainerbot/podman/pubkey.gpg
+
+- name: Install Podman (temporary upstream Fedora 39)
+  dnf:
+    name: podman
+    state: present

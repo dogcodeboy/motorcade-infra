@@ -1,0 +1,123 @@
+---
+- name: Validate architecture mapping
+  set_fact:
+    mc_podman_static_arch_resolved: "{{ 'amd64' if ansible_facts['architecture'] in ['x86_64', 'amd64'] else 'arm64' if ansible_facts['architecture'] in ['aarch64', 'arm64'] else mc_podman_static_arch }}"
+  changed_when: false
+
+- name: Set download URL
+  set_fact:
+    mc_podman_static_url: >-
+      {{ mc_podman_static_url_latest if mc_podman_static_version == 'latest'
+         else mc_podman_static_url_versioned }}
+  changed_when: false
+
+- name: Ensure temp directory exists
+  file:
+    path: "{{ mc_podman_static_tmp_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Check if podman already installed in /usr/local/bin
+  stat:
+    path: /usr/local/bin/podman
+  register: mc_podman_bin
+
+- name: Download podman-static bundle
+  get_url:
+    url: "{{ mc_podman_static_url }}"
+    dest: "{{ mc_podman_static_tmp_dir }}/podman-linux-{{ mc_podman_static_arch_resolved }}.tar.gz"
+    mode: "0644"
+  register: mc_podman_download
+  when: not mc_podman_bin.stat.exists
+
+- name: Extract podman-static bundle
+  unarchive:
+    src: "{{ mc_podman_static_tmp_dir }}/podman-linux-{{ mc_podman_static_arch_resolved }}.tar.gz"
+    dest: "{{ mc_podman_static_tmp_dir }}"
+    remote_src: true
+  when: not mc_podman_bin.stat.exists
+
+- name: Install bundle files to host (copies /usr and /etc trees)
+  # Bundle extracts into podman-linux-<arch>/usr and /etc. We copy them into / (same as upstream README).
+  command: >
+    cp -r "{{ mc_podman_static_tmp_dir }}/podman-linux-{{ mc_podman_static_arch_resolved }}/usr"
+          "{{ mc_podman_static_tmp_dir }}/podman-linux-{{ mc_podman_static_arch_resolved }}/etc" /
+  args:
+    creates: /usr/local/bin/podman
+  when: not mc_podman_bin.stat.exists
+
+- name: Optionally force storage driver to vfs (maximum compatibility)
+  lineinfile:
+    path: /etc/containers/storage.conf
+    regexp: '^driver\s*=.*$'
+    line: 'driver = "vfs"'
+    create: true
+  when: mc_force_storage_vfs | bool
+
+- name: Ensure required host tools are present for typical rootless operation (best-effort)
+  dnf:
+    name:
+      - shadow-utils
+      - util-linux
+      - iptables
+      - uidmap
+    state: present
+  register: mc_host_tools_install
+  failed_when: false
+  when: ansible_facts['pkg_mgr'] == 'dnf'
+
+- name: Create rootless runtime user (mc_podman)
+  user:
+    name: "{{ mc_rootless_user }}"
+    shell: /bin/bash
+    create_home: true
+  when: mc_enable_rootless | bool
+
+- name: Ensure subuid mapping present for rootless user
+  lineinfile:
+    path: /etc/subuid
+    line: "{{ mc_rootless_user }}:{{ mc_rootless_subuid_start }}:{{ mc_rootless_subuid_count }}"
+    create: true
+    state: present
+  when: mc_enable_rootless | bool
+
+- name: Ensure subgid mapping present for rootless user
+  lineinfile:
+    path: /etc/subgid
+    line: "{{ mc_rootless_user }}:{{ mc_rootless_subuid_start }}:{{ mc_rootless_subuid_count }}"
+    create: true
+    state: present
+  when: mc_enable_rootless | bool
+
+- name: Enable linger for rootless user (so user services can run without login)
+  command: "loginctl enable-linger {{ mc_rootless_user }}"
+  changed_when: false
+  failed_when: false
+  when: mc_enable_rootless | bool
+
+- name: Optionally create docker symlink -> podman in /usr/local/bin
+  file:
+    src: /usr/local/bin/podman
+    dest: /usr/local/bin/docker
+    state: link
+  when: mc_enable_docker_symlink | bool
+
+- name: Verify podman works (root)
+  command: /usr/local/bin/podman --version
+  register: mc_podman_version
+  changed_when: false
+
+- name: "Smoke test (root): run hello-world"
+  command: /usr/local/bin/podman run --rm hello-world
+  register: mc_podman_smoke
+  changed_when: false
+  failed_when: mc_podman_smoke.rc != 0
+
+- name: "Smoke test (rootless): run hello-world as mc_podman (if enabled)"
+  become: true
+  become_user: "{{ mc_rootless_user }}"
+  command: /usr/local/bin/podman run --rm hello-world
+  register: mc_podman_smoke_rootless
+  changed_when: false
+  failed_when: (mc_enable_rootless | bool) and (mc_podman_smoke_rootless.rc != 0)
+  when: mc_enable_rootless | bool

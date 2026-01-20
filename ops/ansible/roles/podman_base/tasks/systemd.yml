@@ -1,0 +1,3 @@
+---
+- name: Reload systemd to ensure linger is respected
+  command: systemctl daemon-reexec

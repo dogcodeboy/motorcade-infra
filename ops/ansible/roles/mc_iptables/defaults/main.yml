@@ -1,0 +1,10 @@
+---
+mc_iptables_packages_primary:
+  - iptables-nft
+  - nftables
+mc_iptables_packages_fallback:
+  - iptables
+  - nftables
+
+# Create /usr/bin/iptables symlink if iptables is only in /usr/sbin
+mc_iptables_symlink: true

@@ -1,0 +1,11 @@
+motorcade_runtime_user: motorcade
+motorcade_runtime_group: motorcade
+mc_prefix: mc
+motorcade_base_dir: /var/lib/motorcade
+motorcade_volume_dir: "{{ motorcade_base_dir }}/volumes"
+motorcade_log_dir: "{{ motorcade_base_dir }}/logs"
+motorcade_volumes:
+  - postgres
+  - redis
+  - uploads
+  - backups

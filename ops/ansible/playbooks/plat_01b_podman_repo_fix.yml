@@ -1,0 +1,8 @@
+---
+- name: "PLAT_01B — Podman Repo Fix (Temporary Unblocker)"
+  hosts: motorcade_platform
+  become: true
+  gather_facts: true
+
+  roles:
+    - mc_podman_repo_fix

@@ -1,0 +1,47 @@
+---
+- name: Ensure iptables (netavark dependency) is installed
+  become: true
+  block:
+    - name: Install preferred packages (iptables-nft)
+      ansible.builtin.package:
+        name: "{{ mc_iptables_packages_primary }}"
+        state: present
+  rescue:
+    - name: Install fallback packages (iptables)
+      ansible.builtin.package:
+        name: "{{ mc_iptables_packages_fallback }}"
+        state: present
+
+- name: Ensure iptables is discoverable on PATH (/usr/bin/iptables)
+  become: true
+  when: mc_iptables_symlink | bool
+  block:
+    - name: Stat /usr/bin/iptables
+      ansible.builtin.stat:
+        path: /usr/bin/iptables
+      register: mc_iptables_bin
+
+    - name: Stat /usr/sbin/iptables
+      ansible.builtin.stat:
+        path: /usr/sbin/iptables
+      register: mc_iptables_sbin
+
+    - name: Create /usr/bin/iptables symlink -> /usr/sbin/iptables
+      ansible.builtin.file:
+        src: /usr/sbin/iptables
+        dest: /usr/bin/iptables
+        state: link
+      when:
+        - not mc_iptables_bin.stat.exists
+        - mc_iptables_sbin.stat.exists
+
+- name: Debug iptables version (for netavark)
+  become: true
+  ansible.builtin.command: iptables --version
+  register: mc_iptables_ver
+  changed_when: false
+  failed_when: false
+
+- name: Show iptables version
+  ansible.builtin.debug:
+    var: mc_iptables_ver.stdout

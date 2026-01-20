@@ -1,0 +1,151 @@
+---
+- name: Ensure required base packages for build are installed
+  ansible.builtin.dnf:
+    name:
+      - git
+      - make
+      - gcc
+      - glibc-static
+      - glibc-devel
+      - golang
+      - pkgconf-pkg-config
+      - btrfs-progs-devel
+      - device-mapper-devel
+      - gpgme-devel
+      - libassuan-devel
+      - libseccomp-devel
+      - systemd-devel
+      - shadow-utils
+      - curl
+      - tar
+      - gzip
+      - jq
+    state: present
+
+- name: Create source and build directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ mc_src_root }}"
+    - "{{ mc_build_root }}"
+
+- name: Ensure runtime user exists
+  ansible.builtin.user:
+    name: "{{ mc_runtime_user }}"
+    create_home: true
+    shell: /bin/bash
+    state: present
+
+- name: Enable systemd linger for runtime user (rootless user services)
+  ansible.builtin.command: "loginctl enable-linger {{ mc_runtime_user }}"
+  changed_when: false
+  failed_when: false
+
+# --- Build and install conmon (required by Podman) ---
+- name: Clone conmon
+  ansible.builtin.git:
+    repo: "https://github.com/containers/conmon.git"
+    dest: "{{ mc_src_root }}/conmon"
+    version: "{{ mc_conmon_version }}"
+    force: true
+
+- name: Build conmon
+  ansible.builtin.command: "make"
+  args:
+    chdir: "{{ mc_src_root }}/conmon"
+  environment:
+    PREFIX: "{{ mc_prefix }}"
+  register: mc_conmon_make
+  changed_when: "'Nothing to be done' not in (mc_conmon_make.stdout|default(''))"
+
+- name: Install conmon
+  ansible.builtin.command: "make install PREFIX={{ mc_prefix }}"
+  args:
+    chdir: "{{ mc_src_root }}/conmon"
+
+# --- Build and install podman ---
+- name: Clone podman
+  ansible.builtin.git:
+    repo: "https://github.com/containers/podman.git"
+    dest: "{{ mc_src_root }}/podman"
+    version: "{{ mc_podman_version }}"
+    force: true
+
+- name: Build podman binaries
+  ansible.builtin.command: "make binaries"
+  args:
+    chdir: "{{ mc_src_root }}/podman"
+  environment:
+    CGO_ENABLED: "1"
+    PREFIX: "{{ mc_prefix }}"
+
+- name: Install podman
+  ansible.builtin.command: "make install PREFIX={{ mc_prefix }}"
+  args:
+    chdir: "{{ mc_src_root }}/podman"
+
+# --- Minimal config (temporary) ---
+- name: Ensure /etc/containers exists
+  ansible.builtin.file:
+    path: /etc/containers
+    state: directory
+    mode: "0755"
+
+- name: Write storage.conf (temporary storage driver)
+  ansible.builtin.copy:
+    dest: /etc/containers/storage.conf
+    mode: "0644"
+    content: |
+      [storage]
+      driver = "{{ mc_storage_driver }}"
+      runroot = "/run/containers/storage"
+      graphroot = "/var/lib/containers/storage"
+
+- name: Verify podman is installed
+  ansible.builtin.command: "{{ mc_prefix }}/bin/podman --version"
+  register: mc_podman_version_out
+  changed_when: false
+
+- name: Show installed podman version
+  ansible.builtin.debug:
+    msg: "{{ mc_podman_version_out.stdout }}"
+
+# --- Optional: runc install (helps OCI runtime availability) ---
+- name: Check if runc exists
+  ansible.builtin.command: "runc --version"
+  register: mc_runc_check
+  changed_when: false
+  failed_when: false
+
+- name: Download runc (upstream) if missing and enabled
+  ansible.builtin.get_url:
+    url: "https://github.com/opencontainers/runc/releases/download/{{ mc_runc_version }}/runc.{{ mc_runc_arch }}"
+    dest: "{{ mc_build_root }}/runc.{{ mc_runc_arch }}"
+    mode: "0755"
+  when:
+    - mc_runc_install | bool
+    - mc_runc_check.rc != 0
+
+- name: Install runc to {{ mc_prefix }}/bin
+  ansible.builtin.copy:
+    src: "{{ mc_build_root }}/runc.{{ mc_runc_arch }}"
+    dest: "{{ mc_prefix }}/bin/runc"
+    mode: "0755"
+    remote_src: true
+  when:
+    - mc_runc_install | bool
+    - mc_runc_check.rc != 0
+
+- name: Final runtime sanity check
+  ansible.builtin.command: "{{ mc_prefix }}/bin/podman info --format json"
+  register: mc_podman_info
+  changed_when: false
+  failed_when: false
+
+- name: Print podman info (debug)
+  ansible.builtin.debug:
+    msg: "{{ (mc_podman_info.stdout|default(''))[:800] }}"

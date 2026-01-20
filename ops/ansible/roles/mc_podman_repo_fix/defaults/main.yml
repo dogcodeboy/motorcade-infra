@@ -1,0 +1,21 @@
+---
+# Default region (override in group_vars/prod if needed)
+mc_aws_region: "us-east-1"
+
+# Optional explicit override (if AWS changes repo layout)
+# Example:
+#   https://amazonlinux-2023-repos-us-east-1.s3.amazonaws.com/amazonlinux/2023/container-tools/latest/$basearch/
+mc_container_tools_baseurl: ""
+
+# Repo file name
+mc_container_tools_repo_file: "/etc/yum.repos.d/mc-container-tools.repo"
+
+# Set true to print repo/debug output in play run
+mc_podman_repo_debug: false
+
+# Packages we expect from the container-tools repo
+mc_podman_packages:
+  - podman
+  - podman-docker
+  - slirp4netns
+  - fuse-overlayfs

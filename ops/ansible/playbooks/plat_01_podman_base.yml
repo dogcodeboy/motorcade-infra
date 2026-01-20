@@ -1,0 +1,6 @@
+---
+- name: PLAT_01 — Podman Runtime Base
+  hosts: motorcade_platform
+  become: true
+  roles:
+    - podman_base

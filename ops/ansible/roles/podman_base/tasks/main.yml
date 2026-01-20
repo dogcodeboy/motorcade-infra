@@ -1,0 +1,6 @@
+---
+- import_tasks: install.yml
+- import_tasks: user.yml
+- import_tasks: networking.yml
+- import_tasks: storage.yml
+- import_tasks: systemd.yml

@@ -1,0 +1,30 @@
+---
+- name: Ensure motorcade runtime group exists
+  group:
+    name: "{{ motorcade_runtime_group }}"
+    state: present
+
+- name: Ensure motorcade runtime user exists
+  user:
+    name: "{{ motorcade_runtime_user }}"
+    group: "{{ motorcade_runtime_group }}"
+    create_home: true
+    shell: /bin/bash
+    state: present
+
+- name: Ensure subuid mapping exists
+  lineinfile:
+    path: /etc/subuid
+    line: "{{ motorcade_runtime_user }}:100000:65536"
+    create: yes
+
+- name: Ensure subgid mapping exists
+  lineinfile:
+    path: /etc/subgid
+    line: "{{ motorcade_runtime_user }}:100000:65536"
+    create: yes
+
+- name: Enable lingering for rootless containers
+  command: loginctl enable-linger {{ motorcade_runtime_user }}
+  args:
+    creates: "/var/lib/systemd/linger/{{ motorcade_runtime_user }}"

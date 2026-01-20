@@ -1,0 +1,67 @@
+---
+- name: Detect architecture (debug)
+  ansible.builtin.command: uname -m
+  register: mc_uname
+  changed_when: false
+
+- name: Set container-tools baseurl (if not overridden)
+  ansible.builtin.set_fact:
+    mc_container_tools_baseurl_effective: >-
+      {{
+        mc_container_tools_baseurl
+        if (mc_container_tools_baseurl | length) > 0
+        else 'https://amazonlinux-2023-repos-' ~ mc_aws_region ~ '.s3.amazonaws.com/amazonlinux/2023/container-tools/latest/$basearch/'
+      }}
+
+- name: Write mc-container-tools repo file (temporary unblocker)
+  ansible.builtin.copy:
+    dest: "{{ mc_container_tools_repo_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [mc-container-tools]
+      name=Motorcade Container Tools (TEMP)
+      baseurl={{ mc_container_tools_baseurl_effective }}
+      enabled=1
+      gpgcheck=0
+      metadata_expire=6h
+
+- name: Debug repo config and repolist
+  ansible.builtin.shell: |
+    set -e
+    echo "== /etc/os-release =="; cat /etc/os-release
+    echo "== dnf repolist =="; dnf -q repolist || true
+    echo "== repo file =="; cat {{ mc_container_tools_repo_file }}
+  args:
+    executable: /bin/bash
+  register: mc_repo_debug_out
+  changed_when: false
+  when: mc_podman_repo_debug | bool
+
+- name: Clean and refresh dnf metadata
+  ansible.builtin.command: dnf -q clean all
+  changed_when: false
+
+- name: Makecache for mc-container-tools
+  ansible.builtin.command: dnf -q makecache --disablerepo='*' --enablerepo='mc-container-tools'
+  changed_when: false
+
+- name: Install Podman runtime packages (TEMP repo)
+  ansible.builtin.dnf:
+    name: "{{ mc_podman_packages }}"
+    state: present
+    update_cache: true
+    enablerepo: mc-container-tools
+
+- name: Verify podman is present
+  ansible.builtin.command: podman --version
+  register: mc_podman_ver
+  changed_when: false
+
+- name: Show installed version (debug)
+  ansible.builtin.debug:
+    msg:
+      - "Architecture: {{ mc_uname.stdout }}"
+      - "Podman: {{ mc_podman_ver.stdout }}"
+      - "Repo baseurl: {{ mc_container_tools_baseurl_effective }}"

@@ -1,0 +1,21 @@
+---
+- name: Create motorcade base directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ motorcade_runtime_user }}"
+    group: "{{ motorcade_runtime_group }}"
+    mode: "0755"
+  loop:
+    - "{{ motorcade_base_dir }}"
+    - "{{ motorcade_volume_dir }}"
+    - "{{ motorcade_log_dir }}"
+
+- name: Create persistent volume directories
+  file:
+    path: "{{ motorcade_volume_dir }}/{{ item }}"
+    state: directory
+    owner: "{{ motorcade_runtime_user }}"
+    group: "{{ motorcade_runtime_group }}"
+    mode: "0755"
+  loop: "{{ motorcade_volumes }}"

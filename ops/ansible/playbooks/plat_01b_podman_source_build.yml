@@ -1,0 +1,8 @@
+---
+- name: "PLAT_01B — Podman (Source Build Temporary)"
+  hosts: motorcade_platform
+  become: true
+  vars:
+    mc_platform_component: "podman_source_build"
+  roles:
+    - podman_source_build
