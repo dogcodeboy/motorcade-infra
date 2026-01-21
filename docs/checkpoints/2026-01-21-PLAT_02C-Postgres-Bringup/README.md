@@ -1,18 +1,38 @@
 # CHECKPOINT — 2026-01-21-PLAT_02C-Postgres-Bringup
 
-Status: **PLAT_02C COMPLETE** (Postgres bring-up running, healthchecked)
+Status: **COMPLETE (Authoritative)**
 
-This checkpoint advances the platform from PLAT_02B (foundation only) to an operational Postgres container
-managed by systemd **without** creating schemas or connecting applications.
+This checkpoint captures the successful completion of **PLAT_02C — Postgres Bring-up**.
 
-Locked constraints respected:
-- Rootful Podman on AL2023
-- Networks pre-created (motorcade-core)
-- Canonical root: /srv/motorcade
-- No schema / no app wiring
-- systemd oneshot verification rules unchanged
-- Postgres systemd service remains **disabled** by default (started for this step only)
+Postgres is running, healthy, and managed by systemd, with boot policy explicitly disabled.
+All verification tasks are clean and rerunnable.
 
-Artifacts added:
-- ansible/playbooks/PLAT_02C_postgres_bringup.yml
-- patches/*.append.md
+---
+
+## Included Workstreams
+- PLAT_02 — Networks, Volumes, systemd foundations
+- PLAT_02B — Postgres Foundation (image, volume, env, unit disabled)
+- PLAT_02C — Postgres Bring-up (start + healthcheck)
+
+---
+
+## Locked Decisions
+- Rootful Podman on Amazon Linux 2023
+- systemd-first service management
+- Canonical platform root: `/srv/motorcade`
+- Postgres runs **only when explicitly started**
+- No schema or application wiring at this stage
+
+---
+
+## Verified State
+- systemd service: `motorcade-postgres.service`
+  - Active: **yes**
+  - Enabled on boot: **no**
+- Container: `motorcade-postgres`
+- Healthcheck: `pg_isready` passing
+- Volume: `/srv/motorcade/volumes/postgres`
+
+---
+
+This checkpoint is safe to restore, rerun, or branch from.

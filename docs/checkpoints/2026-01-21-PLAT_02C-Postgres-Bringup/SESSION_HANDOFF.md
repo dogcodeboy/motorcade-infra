@@ -1,4 +1,5 @@
 SESSION HANDOFF — motorcade-infra (Authoritative)
+
 Date: 2026-01-21
 Checkpoint: docs/checkpoints/2026-01-21-PLAT_02C-Postgres-Bringup/
 
@@ -6,26 +7,25 @@ Status
 PLAT_02C COMPLETE.
 
 Summary
-- Postgres container is running under systemd:
-  - service: motorcade-postgres.service
-  - container name: motorcade-postgres
-- Healthcheck verified using pg_isready inside container.
-- Service remains disabled (policy) but started for bring-up.
+- Postgres container is running under rootful Podman
+- systemd service installed in bring-up mode
+- Service is active but boot-disabled
+- Healthcheck (pg_isready) passes
+- Verification logic cleaned (no grep -E, no Go-template conflicts)
 
-Verification commands
-- sudo systemctl is-active motorcade-postgres.service
-- sudo systemctl is-enabled motorcade-postgres.service
-- sudo podman ps | grep motorcade-postgres
-- sudo podman exec motorcade-postgres pg_isready -U postgres
+Decisions (Locked)
+- systemd-first container lifecycle
+- Postgres does not auto-start on boot
+- No schema, no roles, no app wiring yet
+- Canonical data root remains /srv/motorcade
 
 Out of Scope / Frozen
-- No schemas
+- No database schema
+- No users/roles beyond container defaults
 - No application connections
-- No WordPress / motorcade.vip changes
 
 Next Approved Workstream
-PLAT_02D — Postgres Hardening (still no schema)
-- logging + rotation strategy
-- backup hooks (local only)
-- resource limits (systemd)
-- SELinux label verification (volume mount)
+PLAT_03 — Postgres Schema + Roles
+
+Resume Instruction
+“Resume from PLAT_02C complete. Proceed to PLAT_03 per runbook.”
