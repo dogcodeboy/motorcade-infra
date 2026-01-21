@@ -1,0 +1,59 @@
+---
+- name: PLAT_03 – Postgres schema + roles (Podman exec, systemd-first)
+  hosts: motorcade-web-01
+  become: true
+
+  vars_files:
+    - ../group_vars/motorcade/vault.yml
+
+  vars:
+    pg_container_name: motorcade-postgres
+    db_name: motorcade
+    db_schema: app
+
+  tasks:
+    - name: Ensure Postgres service is running (boot-disabled preserved)
+      ansible.builtin.systemd:
+        name: motorcade-postgres
+        state: started
+        enabled: false
+
+    - name: Verify Postgres readiness
+      ansible.builtin.command: podman exec {{ pg_container_name }} pg_isready
+      register: pg_ready
+      changed_when: false
+
+    - name: Create roles, database, and schema (idempotent)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        podman exec {{ pg_container_name }} psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_owner') THEN
+            CREATE ROLE motorcade_owner NOLOGIN;
+          END IF;
+
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_app') THEN
+            CREATE ROLE motorcade_app LOGIN PASSWORD '{{ vault_motorcade_app_db_password }}';
+          END IF;
+
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_ro') THEN
+            CREATE ROLE motorcade_ro LOGIN PASSWORD '{{ vault_motorcade_ro_db_password }}';
+          END IF;
+
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_migrator') THEN
+            CREATE ROLE motorcade_migrator LOGIN PASSWORD '{{ vault_motorcade_migrator_db_password }}';
+          END IF;
+        END $$;
+
+        CREATE DATABASE {{ db_name }} OWNER motorcade_owner;
+        \connect {{ db_name }}
+
+        CREATE SCHEMA IF NOT EXISTS {{ db_schema }} AUTHORIZATION motorcade_owner;
+
+        GRANT USAGE ON SCHEMA {{ db_schema }} TO motorcade_app, motorcade_ro;
+        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA {{ db_schema }} TO motorcade_owner;
+        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {{ db_schema }} TO motorcade_app;
+        GRANT SELECT ON ALL TABLES IN SCHEMA {{ db_schema }} TO motorcade_ro;
+        SQL
+      no_log: true
