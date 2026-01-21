@@ -1,0 +1,176 @@
+---
+- name: "PLAT_02A | Rootful Podman networking + volumes + systemd foundations"
+  hosts: motorcade_platform
+  become: true
+  gather_facts: true
+
+  vars:
+    podman_bin: /usr/local/bin/podman
+
+    motorcade_root: /srv/motorcade
+    motorcade_dirs:
+      - "{{ motorcade_root }}"
+      - "{{ motorcade_root }}/containers"
+      - "{{ motorcade_root }}/volumes"
+      - "{{ motorcade_root }}/volumes/postgres"
+      - "{{ motorcade_root }}/volumes/redis"
+      - "{{ motorcade_root }}/volumes/uploads"
+      - "{{ motorcade_root }}/logs"
+      - "{{ motorcade_root }}/backups"
+
+    podman_networks:
+      - { name: "motorcade-core", subnet: "10.77.0.0/24", gateway: "10.77.0.1" }
+      - { name: "motorcade-edge", subnet: "10.78.0.0/24", gateway: "10.78.0.1" }
+
+    systemd_target: "motorcade-platform.target"
+    prep_script_path: "/usr/local/sbin/motorcade-platform-prep.sh"
+    prep_service_name: "motorcade-platform-prep.service"
+
+  tasks:
+    - name: "Preflight | Ensure podman exists at locked path"
+      ansible.builtin.stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+
+    - name: "Preflight | Fail if podman missing"
+      ansible.builtin.fail:
+        msg: "Expected rootful Podman at {{ podman_bin }} (PLAT_01B) but it was not found."
+      when: not podman_stat.stat.exists
+
+    - name: "Preflight | Podman version"
+      ansible.builtin.command: "{{ podman_bin }} --version"
+      register: podman_version
+      changed_when: false
+
+    - name: "Filesystem | Create canonical /srv/motorcade layout"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop: "{{ motorcade_dirs }}"
+
+    - name: "Networking | List existing podman networks"
+      ansible.builtin.command: "{{ podman_bin }} network ls --format '{{'{{'}}.Name{{'}}'}}'"
+      register: existing_networks
+      changed_when: false
+
+    - name: "Networking | Create required podman networks if missing"
+      ansible.builtin.command: >-
+        {{ podman_bin }} network create
+        --subnet {{ item.subnet }}
+        --gateway {{ item.gateway }}
+        {{ item.name }}
+      loop: "{{ podman_networks }}"
+      when: item.name not in (existing_networks.stdout_lines | default([]))
+
+    - name: "Networking | Verify networks"
+      ansible.builtin.command: "{{ podman_bin }} network inspect {{ item.name }}"
+      loop: "{{ podman_networks }}"
+      changed_when: false
+
+    - name: "systemd | Install prep script"
+      ansible.builtin.copy:
+        dest: "{{ prep_script_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          PODMAN="{{ podman_bin }}"
+
+          # Directories
+          for d in \
+            "{{ motorcade_root }}" \
+            "{{ motorcade_root }}/containers" \
+            "{{ motorcade_root }}/volumes" \
+            "{{ motorcade_root }}/volumes/postgres" \
+            "{{ motorcade_root }}/volumes/redis" \
+            "{{ motorcade_root }}/volumes/uploads" \
+            "{{ motorcade_root }}/logs" \
+            "{{ motorcade_root }}/backups"; do
+            mkdir -p "$d"
+          done
+
+          # Networks
+          ensure_net() {
+            local name="$1" subnet="$2" gw="$3"
+            if ! "$PODMAN" network exists "$name" >/dev/null 2>&1; then
+              "$PODMAN" network create --subnet "$subnet" --gateway "$gw" "$name"
+            fi
+          }
+
+          ensure_net "motorcade-core" "10.77.0.0/24" "10.77.0.1"
+          ensure_net "motorcade-edge" "10.78.0.0/24" "10.78.0.1"
+
+          exit 0
+
+    - name: "systemd | Install platform target"
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ systemd_target }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade Platform (rootful Podman) - logical target
+          Wants={{ prep_service_name }}
+          After=network-online.target
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: "systemd | Install prep service"
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ prep_service_name }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade Platform foundations (directories + podman networks)
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart={{ prep_script_path }}
+
+          [Install]
+          WantedBy={{ systemd_target }}
+
+    - name: "systemd | Reload daemon"
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: "systemd | Enable target (safe)"
+      ansible.builtin.systemd:
+        name: "{{ systemd_target }}"
+        enabled: true
+
+    - name: "systemd | Run prep service now"
+      ansible.builtin.systemd:
+        name: "{{ prep_service_name }}"
+        state: started
+
+    - name: "Verify | Get prep service oneshot Result"
+      ansible.builtin.command: "systemctl show -p Result --value {{ prep_service_name }}"
+      register: prep_result
+      changed_when: false
+
+    - name: "Verify | Assert prep service Result=success"
+      ansible.builtin.assert:
+        that:
+          - prep_result.stdout | trim == "success"
+        fail_msg: "Prep service did not report Result=success (got '{{ prep_result.stdout | trim }}')."
+        success_msg: "Prep service Result=success (oneshot complete)."
+
+    - name: "Verify | Print verification outputs"
+      ansible.builtin.debug:
+        msg:
+          - "{{ podman_version.stdout }}"
+          - "Prep service OK (see status output above)."
+          - "Canonical root: {{ motorcade_root }}"

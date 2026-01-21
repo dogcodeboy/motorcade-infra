@@ -19,6 +19,16 @@ website:
     static_root: /var/www/motorcade_static
 
 platform:
+  runtime:
+    container_engine: podman
+    install_mode: static_rootful
+    podman_path: /usr/local/bin/podman
+    foundations:
+      checkpoint: 2026-01-20-PLAT_01B-Podman-Static-Rootful
+      volumes_root: /srv/motorcade
+      networks:
+        motorcade-core: 10.77.0.0/24
+        motorcade-edge: 10.78.0.0/24
   postgres:
     mode: container_phase1
     version: "16"

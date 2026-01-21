@@ -1,0 +1,6 @@
+- Rootful Podman is the runtime standard
+- Networks:
+  - motorcade-core (10.77.0.0/24)
+  - motorcade-edge (10.78.0.0/24)
+- Canonical root: /srv/motorcade
+- systemd oneshot verification uses Result=success

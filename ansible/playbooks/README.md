@@ -11,3 +11,8 @@ Each playbook must:
 - backup-first if modifying state
 - print restore path
 - verify success
+
+## Current playbooks
+
+### Platform
+- `PLAT_02A_networks_volumes_systemd_foundations.yml` — Creates Podman networks, /srv/motorcade directories, and a rootful systemd target + prep service.
