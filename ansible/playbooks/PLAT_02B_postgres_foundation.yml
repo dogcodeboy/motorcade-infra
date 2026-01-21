@@ -1,0 +1,126 @@
+---
+- name: "PLAT_02B — Postgres Foundation (no start)"
+  hosts: motorcade
+  become: true
+  gather_facts: true
+
+  # HOTFIX: make vault vars path resolution deterministic.
+  # Relative paths in vars_files can resolve unexpectedly; use playbook_dir.
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/motorcade/vault.yml"
+
+  vars:
+    motorcade_root: "/srv/motorcade"
+    motorcade_pg_volume: "/srv/motorcade/volumes/postgres"
+    motorcade_pg_network: "motorcade-core"
+    motorcade_pg_image: "docker.io/library/postgres:16"
+    motorcade_pg_env_dir: "/etc/motorcade"
+    motorcade_pg_env_file: "/etc/motorcade/postgres.env"
+    motorcade_pg_service: "motorcade-postgres.service"
+    motorcade_pg_container: "motorcade-postgres"
+
+  tasks:
+    - name: "Preflight | podman present"
+      ansible.builtin.command: /usr/local/bin/podman --version
+      register: podman_version
+      changed_when: false
+
+    - name: "Preflight | motorcade-core network exists"
+      ansible.builtin.command: /usr/local/bin/podman network exists {{ motorcade_pg_network }}
+      register: net_exists
+      changed_when: false
+
+    - name: "Preflight | require vault_postgres_password"
+      ansible.builtin.assert:
+        that:
+          - vault_postgres_password is defined
+          - (vault_postgres_password | length) >= 12
+        fail_msg: >
+          vault_postgres_password is missing/too short. Ensure it exists in
+          ansible/group_vars/motorcade/vault.yml (encrypted) and run with --ask-vault-pass.
+
+    - name: "Filesystem | ensure /srv/motorcade exists"
+      ansible.builtin.file:
+        path: "{{ motorcade_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Filesystem | ensure postgres volume directory exists"
+      ansible.builtin.file:
+        path: "{{ motorcade_pg_volume }}"
+        state: directory
+        owner: "999"
+        group: "999"
+        mode: "0700"
+
+    - name: "Image | pull postgres image"
+      ansible.builtin.command: /usr/local/bin/podman pull {{ motorcade_pg_image }}
+      register: pull_out
+      changed_when: "'Skipping' not in pull_out.stdout"
+
+    - name: "Config | ensure /etc/motorcade exists"
+      ansible.builtin.file:
+        path: "{{ motorcade_pg_env_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Config | write postgres env file (root-only)"
+      ansible.builtin.copy:
+        dest: "{{ motorcade_pg_env_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          POSTGRES_PASSWORD={{ vault_postgres_password }}
+          POSTGRES_USER=postgres
+          POSTGRES_DB=postgres
+
+    - name: "systemd | install motorcade-postgres.service (disabled)"
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ motorcade_pg_service }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade Postgres (foundation only; no autostart)
+          After=network-online.target
+          Wants=network-online.target
+          Requires=motorcade-platform.target
+
+          [Service]
+          Type=simple
+          EnvironmentFile={{ motorcade_pg_env_file }}
+          ExecStart=/usr/local/bin/podman run --rm --name {{ motorcade_pg_container }} \
+            --network {{ motorcade_pg_network }} \
+            -v {{ motorcade_pg_volume }}:/var/lib/postgresql/data:Z \
+            -e POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
+            -e POSTGRES_USER=${POSTGRES_USER} \
+            -e POSTGRES_DB=${POSTGRES_DB} \
+            {{ motorcade_pg_image }}
+          ExecStop=/usr/local/bin/podman stop -t 10 {{ motorcade_pg_container }}
+          Restart=on-failure
+          RestartSec=3
+
+          [Install]
+          WantedBy=motorcade-platform.target
+
+    - name: "systemd | daemon-reload"
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: "systemd | ensure service is disabled (foundation scope)"
+      ansible.builtin.systemd:
+        name: "{{ motorcade_pg_service }}"
+        enabled: false
+        state: stopped
+
+    - name: "Verify | service is disabled"
+      ansible.builtin.command: systemctl is-enabled {{ motorcade_pg_service }}
+      register: is_enabled
+      changed_when: false
+      failed_when: is_enabled.stdout.strip() != "disabled"

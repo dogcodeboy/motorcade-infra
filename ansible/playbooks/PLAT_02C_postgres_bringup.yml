@@ -1,0 +1,29 @@
+---
+- name: "PLAT_02C — Postgres Bring-up (start + healthcheck; still no schema)"
+  hosts: motorcade
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/motorcade/vault.yml"
+
+  vars:
+    motorcade_pg_container: "motorcade-postgres"
+    motorcade_pg_service: "motorcade-postgres.service"
+    motorcade_pg_enable_on_boot: false
+
+  tasks:
+    - name: Verify | service is active
+      ansible.builtin.command: systemctl is-active {{ motorcade_pg_service }}
+      register: svc_state
+      changed_when: false
+      failed_when: svc_state.stdout.strip() != "active"
+
+    - name: Verify | postgres container exists and is running (final-safe check)
+      ansible.builtin.shell: |
+        set -e
+        podman ps | awk '{print $NF}' | grep -x {{ motorcade_pg_container }}
+      args:
+        executable: /bin/bash
+      register: pg_ps
+      changed_when: false
