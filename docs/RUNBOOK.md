@@ -26,20 +26,21 @@ This document is the **single source of truth** for build/deploy order across al
 6. `PLAT_02B_postgres_foundation.yml` (container foundation; no start)
 7. `PLAT_02C_postgres_bringup.yml` (bring-up + healthcheck; boot-disabled)
 8. `PLAT_03_postgres_schema_roles.yml` (schema + roles; still no app wiring)
-9. `PLAT_04_lead_intake_api.yml`
-10. `PLAT_05_people_api.yml`
-11. `PLAT_06_reverse_proxy_routes.yml`
-12. `PLAT_07_backups_postgres_to_s3.yml`
+9. `PLAT_04A_postgres_connectivity_ro.yml` (read-only connectivity verification)
+10. `PLAT_04_lead_intake_api.yml`
+11. `PLAT_05_people_api.yml`
+12. `PLAT_06_reverse_proxy_routes.yml`
+13. `PLAT_07_backups_postgres_to_s3.yml`
 
 ### Identity (SSO / directory)
-13. `ID_01_keycloak_bootstrap.yml`
-14. `ID_02_freeipa_directory.yml`
-15. `ID_03_service_accounts_and_rbac.yml`
+14. `ID_01_keycloak_bootstrap.yml`
+15. `ID_02_freeipa_directory.yml`
+16. `ID_03_service_accounts_and_rbac.yml`
 
 ### Mail/Calendar (groupware)
-16. `MAIL_01_mailcow_deploy.yml`
-17. `MAIL_02_imap_migrate.yml`
-18. `MAIL_03_branding.yml`
+17. `MAIL_01_mailcow_deploy.yml`
+18. `MAIL_02_imap_migrate.yml`
+19. `MAIL_03_branding.yml`
 
 ## Acceptance criteria
 A step is "complete" only when:

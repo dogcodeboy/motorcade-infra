@@ -1,10 +1,12 @@
 ---
-- name: PLAT_03 – Postgres schema + roles (Podman exec, systemd-first)
-  hosts: motorcade-web-01
+- name: PLAT_03 — Postgres roles + database + schema (Podman exec, systemd-first)
+  hosts: motorcade
   become: true
+  gather_facts: true
 
+  # Deterministic vault include regardless of CWD
   vars_files:
-    - ../group_vars/motorcade/vault.yml
+    - "{{ playbook_dir }}/../group_vars/motorcade/vault.yml"
 
   vars:
     pg_container_name: motorcade-postgres
@@ -18,42 +20,71 @@
         state: started
         enabled: false
 
-    - name: Verify Postgres readiness
-      ansible.builtin.command: podman exec {{ pg_container_name }} pg_isready
-      register: pg_ready
-      changed_when: false
+    - name: Create roles, database, and schema (idempotent) — bash heredoc via argv (parser-safe)
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - -lc
+          - |
+              set -euo pipefail
 
-    - name: Create roles, database, and schema (idempotent)
-      ansible.builtin.shell: |
-        set -euo pipefail
-        podman exec {{ pg_container_name }} psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
-        DO $$
-        BEGIN
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_owner') THEN
-            CREATE ROLE motorcade_owner NOLOGIN;
-          END IF;
+              podman exec {{ pg_container_name }} psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+              DO $$
+              BEGIN
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_owner') THEN
+                  CREATE ROLE motorcade_owner NOLOGIN;
+                END IF;
 
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_app') THEN
-            CREATE ROLE motorcade_app LOGIN PASSWORD '{{ vault_motorcade_app_db_password }}';
-          END IF;
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_app') THEN
+                  CREATE ROLE motorcade_app LOGIN PASSWORD '{{ vault_motorcade_app_db_password }}';
+                END IF;
 
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_ro') THEN
-            CREATE ROLE motorcade_ro LOGIN PASSWORD '{{ vault_motorcade_ro_db_password }}';
-          END IF;
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_ro') THEN
+                  CREATE ROLE motorcade_ro LOGIN PASSWORD '{{ vault_motorcade_ro_db_password }}';
+                END IF;
 
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_migrator') THEN
-            CREATE ROLE motorcade_migrator LOGIN PASSWORD '{{ vault_motorcade_migrator_db_password }}';
-          END IF;
-        END $$;
+                IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'motorcade_migrator') THEN
+                  CREATE ROLE motorcade_migrator LOGIN PASSWORD '{{ vault_motorcade_migrator_db_password }}';
+                END IF;
+              END $$;
 
-        CREATE DATABASE {{ db_name }} OWNER motorcade_owner;
-        \connect {{ db_name }}
+              DO $$
+              BEGIN
+                IF NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ db_name }}') THEN
+                  CREATE DATABASE {{ db_name }} OWNER motorcade_owner;
+                END IF;
+              END $$;
 
-        CREATE SCHEMA IF NOT EXISTS {{ db_schema }} AUTHORIZATION motorcade_owner;
+              \connect {{ db_name }}
 
-        GRANT USAGE ON SCHEMA {{ db_schema }} TO motorcade_app, motorcade_ro;
-        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA {{ db_schema }} TO motorcade_owner;
-        GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {{ db_schema }} TO motorcade_app;
-        GRANT SELECT ON ALL TABLES IN SCHEMA {{ db_schema }} TO motorcade_ro;
-        SQL
+              CREATE SCHEMA IF NOT EXISTS {{ db_schema }} AUTHORIZATION motorcade_owner;
+
+              GRANT USAGE ON SCHEMA {{ db_schema }} TO motorcade_app, motorcade_ro, motorcade_migrator;
+
+              GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA {{ db_schema }} TO motorcade_migrator;
+              GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA {{ db_schema }} TO motorcade_app;
+              GRANT SELECT ON ALL TABLES IN SCHEMA {{ db_schema }} TO motorcade_ro;
+
+              GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {{ db_schema }} TO motorcade_migrator;
+              GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA {{ db_schema }} TO motorcade_app;
+              GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA {{ db_schema }} TO motorcade_ro;
+
+              ALTER DEFAULT PRIVILEGES IN SCHEMA {{ db_schema }} GRANT ALL PRIVILEGES ON TABLES TO motorcade_migrator;
+              ALTER DEFAULT PRIVILEGES IN SCHEMA {{ db_schema }} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO motorcade_app;
+              ALTER DEFAULT PRIVILEGES IN SCHEMA {{ db_schema }} GRANT SELECT ON TABLES TO motorcade_ro;
+
+              ALTER DEFAULT PRIVILEGES IN SCHEMA {{ db_schema }} GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO motorcade_migrator;
+              ALTER DEFAULT PRIVILEGES IN SCHEMA {{ db_schema }} GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO motorcade_app;
+              ALTER DEFAULT PRIVILEGES IN SCHEMA {{ db_schema }} GRANT USAGE, SELECT ON SEQUENCES TO motorcade_ro;
+              SQL
       no_log: true
+      register: plat03_apply
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "PLAT_03 applied successfully."
+          - "Container: {{ pg_container_name }}"
+          - "Database: {{ db_name }}"
+          - "Schema: {{ db_schema }}"
+      changed_when: false

@@ -1,0 +1,44 @@
+---
+- name: PLAT_04A — Postgres read-only connectivity verification (Podman exec, systemd-first)
+  hosts: motorcade
+  become: true
+  gather_facts: true
+
+  vars_files:
+    # Vault secrets (run with --ask-vault-pass)
+    - "{{ playbook_dir }}/../group_vars/motorcade/vault.yml"
+    # Non-secret postgres settings (container name, db, users)
+    - "{{ playbook_dir }}/../group_vars/motorcade/postgres.yml"
+
+  vars:
+    # Backwards-compatible defaults if postgres.yml is missing
+    pg_container_name: "{{ pg_container_name | default('motorcade-postgres') }}"
+    pg_db_name: "{{ pg_db_name | default('motorcade') }}"
+    pg_ro_user: "{{ pg_ro_user | default('motorcade_ro') }}"
+
+  tasks:
+    - name: Ensure Postgres service is running (boot-disabled preserved)
+      systemd:
+        name: motorcade-postgres
+        state: started
+        enabled: false
+
+    - name: Verify Postgres readiness
+      command: >
+        podman exec {{ pg_container_name }}
+        pg_isready -U postgres
+      register: pg_ready
+      changed_when: false
+      failed_when: pg_ready.rc != 0
+
+    # NOTE: No precheck task here. If the RO role is missing, the login step below will fail clearly.
+    - name: Read-only login + basic query (SELECT 1)
+      command: >
+        podman exec
+        -e PGPASSWORD={{ vault_motorcade_ro_db_password }}
+        {{ pg_container_name }}
+        psql -U {{ pg_ro_user }} -d {{ pg_db_name }} -c "SELECT 1;"
+      register: ro_query
+      changed_when: false
+      failed_when: ro_query.rc != 0
+      no_log: true

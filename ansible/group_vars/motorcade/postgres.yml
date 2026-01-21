@@ -1,0 +1,8 @@
+---
+# Non-secret postgres settings for Motorcade platform container
+# Container name MUST match `podman ps` output on the host.
+pg_container_name: motorcade-postgres
+
+# DB + role names used by Motorcade
+pg_db_name: motorcade
+pg_ro_user: motorcade_ro
