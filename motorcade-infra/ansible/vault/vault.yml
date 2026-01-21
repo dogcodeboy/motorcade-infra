@@ -1,0 +1,10 @@
+# Ansible Vault secrets
+# CHECKPOINT: 2026-01-21-LEADGEN-PLAT04-PREP
+#
+# This file MUST be encrypted with ansible-vault.
+# After unzipping, run:
+#   ansible-vault encrypt ansible/vault/vault.yml
+#
+# Required for PLAT_04_lead_intake_api.yml (fail-closed):
+
+LEADGEN_API_KEY: "REPLACE_WITH_LONG_RANDOM_SECRET"

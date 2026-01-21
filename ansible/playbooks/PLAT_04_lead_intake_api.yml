@@ -1,0 +1,101 @@
+---
+- name: Deploy LeadGen Intake API (PLAT_04)
+  hosts: motorcade
+  become: true
+
+  vars_files:
+    # Load encrypted vault from the repo's standard group_vars location.
+    # This is playbook-relative so it works regardless of where Ansible is executed from.
+    - "{{ playbook_dir }}/../group_vars/motorcade/vault.yml"
+
+  vars:
+    leadgen_root: /opt/motorcade
+    leadgen_repo_url: "https://github.com/dogcodeboy/motorcade-leadgen.git"
+    leadgen_repo_dir: /opt/motorcade/motorcade-leadgen
+    # LeadGen API Containerfile lives under app/api in the LeadGen repo on EC2.
+    leadgen_api_build_dir: /opt/motorcade/motorcade-leadgen/app/api
+    leadgen_image: "motorcade/leadgen-api:latest"
+    leadgen_container: "motorcade-leadgen-api"
+    # app/api/Containerfile runs the API on port 8080
+    leadgen_port: "8080"
+
+  pre_tasks:
+    - name: Assert LEADGEN_API_KEY is defined (fail-closed)
+      ansible.builtin.assert:
+        that:
+          - LEADGEN_API_KEY is defined
+          - (LEADGEN_API_KEY | string | length) > 0
+        fail_msg: "LEADGEN_API_KEY missing from Ansible vault. Aborting (fail-closed)."
+
+    - name: Ensure /opt/motorcade exists
+      ansible.builtin.file:
+        path: "{{ leadgen_root }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure git is installed
+      ansible.builtin.package:
+        name: git
+        state: present
+
+    - name: Ensure curl is installed
+      ansible.builtin.package:
+        name: curl
+        state: present
+
+    # Your environment installs podman via a non-standard (static) mechanism.
+    # We *do not* attempt dnf install podman. We ensure podman exists by using your existing role.
+    - name: Check if podman is present
+      ansible.builtin.command: podman --version
+      register: podman_ver
+      changed_when: false
+      failed_when: false
+
+    - name: Ensure podman (static install) is present
+      when: podman_ver.rc != 0
+      ansible.builtin.include_role:
+        name: podman_static
+
+  tasks:
+    - name: Clone/update LeadGen repo on EC2
+      ansible.builtin.git:
+        repo: "{{ leadgen_repo_url }}"
+        dest: "{{ leadgen_repo_dir }}"
+        version: main
+        update: yes
+
+    - name: Build LeadGen API image (podman build)
+      ansible.builtin.command: >
+        podman build -f Containerfile -t {{ leadgen_image }} .
+      args:
+        chdir: "{{ leadgen_api_build_dir }}"
+      register: build_out
+      changed_when: "'Successfully tagged' in (build_out.stdout | default('')) or build_out.rc == 0"
+
+    - name: Stop existing container if running
+      ansible.builtin.command: podman rm -f {{ leadgen_container }}
+      register: rm_out
+      changed_when: rm_out.rc == 0
+      failed_when: false
+
+    - name: Run LeadGen API container
+      ansible.builtin.command: >
+        podman run -d --name {{ leadgen_container }}
+        --restart=always
+        -p 127.0.0.1:{{ leadgen_port }}:{{ leadgen_port }}
+        -e LEADGEN_API_KEY={{ LEADGEN_API_KEY }}
+        {{ leadgen_image }}
+      register: run_out
+      changed_when: run_out.rc == 0
+
+    - name: Wait for LeadGen health endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ leadgen_port }}/lead/health"
+        method: GET
+        status_code: 200
+      register: health
+      retries: 30
+      delay: 2
+      until: health.status == 200
