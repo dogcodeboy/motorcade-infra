@@ -27,6 +27,11 @@ This document is the **single source of truth** for build/deploy order across al
 7. `PLAT_02C_postgres_bringup.yml` (bring-up + healthcheck; boot-disabled)
 8. `PLAT_03_postgres_schema_roles.yml` (schema + roles; still no app wiring)
 9. `PLAT_04A_postgres_connectivity_ro.yml` (read-only connectivity verification)
+   - **LOCKED — DO NOT RERUN**
+   - Checkpoint: `docs/checkpoints/2026-01-20-PLAT_04A/`
+   - Root cause resolved: Podman container name mismatch (correct container: `motorcade-postgres`)
+   - Status: Ansible YAML, Vault secrets, Postgres roles/schema VERIFIED
+   - Proceed next to: `PLAT_04_lead_intake_api.yml`
 10. `PLAT_04_lead_intake_api.yml`
 11. `PLAT_05_people_api.yml`
 12. `PLAT_06_reverse_proxy_routes.yml`
