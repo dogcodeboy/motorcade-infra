@@ -1,0 +1,13 @@
+Title:
+Checkpoint: 2026-01-21 PLAT_04 complete (LeadGen API containerized)
+
+Body:
+Adds formal checkpoint documenting completion of PLAT_04.
+
+- LeadGen API containerized via Podman
+- Dependency crash resolved and verified
+- Health endpoint passing
+- Deployment process validated
+- Next step defined as PLAT_05
+
+Append-only checkpoint; no prior state modified.

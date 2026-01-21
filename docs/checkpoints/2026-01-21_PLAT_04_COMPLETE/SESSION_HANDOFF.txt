@@ -1,0 +1,38 @@
+SESSION HANDOFF — Motorcade Platform
+Checkpoint: 2026-01-21_PLAT_04_COMPLETE
+
+Host: motorcade-web-01
+OS: Amazon Linux 2023
+
+Repos in play:
+- ~/Repos/motorcade-infra
+- ~/Repos/motorcade-leadgen
+- ~/Repos/motorcade.vip
+
+=== COMPLETED & CLOSED ===
+PLAT_04 — LeadGen Intake API
+
+- API containerized using Podman (static install)
+- Dependency crash resolved (pydantic[email])
+- Container rebuild verified via Ansible
+- /lead/health endpoint passing
+- GitKraken workflow confirmed
+- No CI/CD, no auto-pull, no live GitHub sync
+
+Operational rules locked:
+- Zips only
+- Explicit TARGET REPO + cd instructions
+- One repo per zip
+- No editor instructions unless requested
+
+Future hardening noted:
+- GitHub lockdown playbook to be added later
+
+=== CURRENT RUNTIME STATE ===
+- Container: motorcade-leadgen-api
+- Bound to: 127.0.0.1:8000
+- Not publicly exposed
+- Health endpoint responding
+
+=== NEXT STEP ===
+Proceed with PLAT_05 — NGINX Reverse Proxy for LeadGen API.
