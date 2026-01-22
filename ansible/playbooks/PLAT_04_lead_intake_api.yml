@@ -1,101 +1,179 @@
 ---
-- name: Deploy LeadGen Intake API (PLAT_04)
-  hosts: motorcade
+- name: "Deploy LeadGen Intake API (PLAT_04) — stable build-context sync + bind 127.0.0.1:8000"
+  hosts: motorcade_platform
   become: true
-
-  vars_files:
-    # Load encrypted vault from the repo's standard group_vars location.
-    # This is playbook-relative so it works regardless of where Ansible is executed from.
-    - "{{ playbook_dir }}/../group_vars/motorcade/vault.yml"
-
   vars:
-    leadgen_root: /opt/motorcade
-    leadgen_repo_url: "https://github.com/dogcodeboy/motorcade-leadgen.git"
-    leadgen_repo_dir: /opt/motorcade/motorcade-leadgen
-    # LeadGen API Containerfile lives under app/api in the LeadGen repo on EC2.
-    leadgen_api_build_dir: /opt/motorcade/motorcade-leadgen/app/api
-    leadgen_image: "motorcade/leadgen-api:latest"
-    leadgen_container: "motorcade-leadgen-api"
-    # app/api/Containerfile runs the API on port 8080
-    leadgen_port: "8080"
+    # Local workstation path to the LeadGen repo (controller-side). Override if needed.
+    leadgen_src_local_path: "{{ lookup('env','HOME') }}/Repos/motorcade-leadgen"
+    leadgen_remote_src_dir: "/opt/motorcade-leadgen"
+    leadgen_remote_tar: "/tmp/motorcade-leadgen-src.tgz"
 
-  pre_tasks:
-    - name: Assert LEADGEN_API_KEY is defined (fail-closed)
-      ansible.builtin.assert:
-        that:
-          - LEADGEN_API_KEY is defined
-          - (LEADGEN_API_KEY | string | length) > 0
-        fail_msg: "LEADGEN_API_KEY missing from Ansible vault. Aborting (fail-closed)."
+    leadgen_container_name: "motorcade-leadgen-api"
+    leadgen_image_name: "motorcade-leadgen-api"
+    leadgen_bind_host: "127.0.0.1"
+    leadgen_bind_port: 8000
+    leadgen_container_port: 8000
 
-    - name: Ensure /opt/motorcade exists
-      ansible.builtin.file:
-        path: "{{ leadgen_root }}"
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Ensure git is installed
-      ansible.builtin.package:
-        name: git
-        state: present
-
-    - name: Ensure curl is installed
-      ansible.builtin.package:
-        name: curl
-        state: present
-
-    # Your environment installs podman via a non-standard (static) mechanism.
-    # We *do not* attempt dnf install podman. We ensure podman exists by using your existing role.
-    - name: Check if podman is present
-      ansible.builtin.command: podman --version
-      register: podman_ver
-      changed_when: false
-      failed_when: false
-
-    - name: Ensure podman (static install) is present
-      when: podman_ver.rc != 0
-      ansible.builtin.include_role:
-        name: podman_static
+    # Health endpoint used for readiness checks
+    leadgen_health_path: "/lead/health"
+    leadgen_wait_seconds: 60
 
   tasks:
-    - name: Clone/update LeadGen repo on EC2
-      ansible.builtin.git:
-        repo: "{{ leadgen_repo_url }}"
-        dest: "{{ leadgen_repo_dir }}"
-        version: main
-        update: yes
+    - name: Gather facts
+      ansible.builtin.setup:
 
-    - name: Build LeadGen API image (podman build)
-      ansible.builtin.command: >
-        podman build -f Containerfile -t {{ leadgen_image }} .
+    - name: "Controller sanity: LeadGen repo must exist at {{ leadgen_src_local_path }}"
+      ansible.builtin.stat:
+        path: "{{ leadgen_src_local_path }}"
+      delegate_to: localhost
+      register: leadgen_local_repo
+
+    - name: "Fail fast if LeadGen repo not found on controller"
+      ansible.builtin.fail:
+        msg: >
+          LeadGen repo not found on the controller at {{ leadgen_src_local_path }}.
+          Fix by cloning or placing it there, or override leadgen_src_local_path.
+          (Example: ansible-playbook ... -e leadgen_src_local_path=/path/to/motorcade-leadgen)
+      when: not leadgen_local_repo.stat.exists or not leadgen_local_repo.stat.isdir
+
+    - name: Ensure Podman is present (runtime dependency)
+      ansible.builtin.command: podman --version
+      changed_when: false
+
+    - name: Ensure remote LeadGen src directory exists
+      ansible.builtin.file:
+        path: "{{ leadgen_remote_src_dir }}"
+        state: directory
+        mode: "0755"
+
+    # We intentionally avoid rsync/synchronize to reduce dependency risk (given prior dnf constraints).
+    - name: "Create controller-side tarball of LeadGen repo (no .git, venv, caches)"
+      ansible.builtin.archive:
+        path: "{{ leadgen_src_local_path }}"
+        dest: "{{ leadgen_remote_tar }}"
+        format: gz
+        exclude_path:
+          - "{{ leadgen_src_local_path }}/.git"
+          - "{{ leadgen_src_local_path }}/.venv"
+          - "{{ leadgen_src_local_path }}/venv"
+          - "{{ leadgen_src_local_path }}/__pycache__"
+          - "{{ leadgen_src_local_path }}/.pytest_cache"
+          - "{{ leadgen_src_local_path }}/.mypy_cache"
+          - "{{ leadgen_src_local_path }}/node_modules"
+      delegate_to: localhost
+      become: false
+
+    - name: "Copy LeadGen tarball to target"
+      ansible.builtin.copy:
+        src: "{{ leadgen_remote_tar }}"
+        dest: "{{ leadgen_remote_tar }}"
+        mode: "0644"
+
+    - name: "Clean remote LeadGen src directory (stable, deterministic build context)"
+      ansible.builtin.file:
+        path: "{{ leadgen_remote_src_dir }}"
+        state: absent
+
+    - name: "Re-create remote LeadGen src directory"
+      ansible.builtin.file:
+        path: "{{ leadgen_remote_src_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: "Extract LeadGen repo onto target (build context)"
+      ansible.builtin.unarchive:
+        src: "{{ leadgen_remote_tar }}"
+        dest: "{{ leadgen_remote_src_dir | dirname }}"
+        remote_src: true
+      # archive creates a top-level folder; we expect /opt/motorcade-leadgen after extraction
+      register: unarchive_result
+
+    - name: "Ensure extracted directory name is exactly /opt/motorcade-leadgen"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        # If archive extracted as /opt/<basename>, normalize to /opt/motorcade-leadgen
+        if [ ! -d "{{ leadgen_remote_src_dir }}" ]; then
+          # Try to find a single directory under /opt that matches "motorcade-leadgen*"
+          cand="$(ls -1d /opt/motorcade-leadgen* 2>/dev/null | head -n 1 || true)"
+          if [ -n "$cand" ] && [ -d "$cand" ]; then
+            rm -rf "{{ leadgen_remote_src_dir }}"
+            mv "$cand" "{{ leadgen_remote_src_dir }}"
+          fi
+        fi
+        test -d "{{ leadgen_remote_src_dir }}"
       args:
-        chdir: "{{ leadgen_api_build_dir }}"
-      register: build_out
-      changed_when: "'Successfully tagged' in (build_out.stdout | default('')) or build_out.rc == 0"
+        executable: /bin/bash
+      changed_when: false
 
-    - name: Stop existing container if running
-      ansible.builtin.command: podman rm -f {{ leadgen_container }}
-      register: rm_out
-      changed_when: rm_out.rc == 0
-      failed_when: false
+    - name: "Verify Containerfile/Dockerfile exists in build context"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd "{{ leadgen_remote_src_dir }}"
+        if [ -f Containerfile ]; then
+          echo "OK: Containerfile present"
+          exit 0
+        fi
+        if [ -f Dockerfile ]; then
+          echo "OK: Dockerfile present"
+          exit 0
+        fi
+        echo "ERROR: No Containerfile or Dockerfile in {{ leadgen_remote_src_dir }}" >&2
+        ls -la "{{ leadgen_remote_src_dir }}" >&2
+        exit 2
+      args:
+        executable: /bin/bash
+      changed_when: false
 
-    - name: Run LeadGen API container
-      ansible.builtin.command: >
-        podman run -d --name {{ leadgen_container }}
-        --restart=always
-        -p 127.0.0.1:{{ leadgen_port }}:{{ leadgen_port }}
-        -e LEADGEN_API_KEY={{ LEADGEN_API_KEY }}
-        {{ leadgen_image }}
-      register: run_out
-      changed_when: run_out.rc == 0
+    - name: "Remove existing LeadGen API container (if any)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if podman ps -a --format '{{"{{"}}.Names{{"}}"}}' | grep -qx "{{ leadgen_container_name }}"; then
+          podman rm -f "{{ leadgen_container_name }}"
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: true
 
-    - name: Wait for LeadGen health endpoint
+    - name: "Remove existing LeadGen API image (if any)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if podman images --format '{{"{{"}}.Repository{{"}}"}}:{{"{{"}}.Tag{{"}}"}}' | grep -q "^{{ leadgen_image_name }}:"; then
+          podman rmi -f "{{ leadgen_image_name }}" || true
+        fi
+        # Also remove untagged leftovers from prior builds of same name
+        podman images --format '{{"{{"}}.ID{{"}}"}} {{ "{{"{{"}}.Repository{{"}}"}}' | awk '$2=="{{ leadgen_image_name }}" {print $1}' | xargs -r podman rmi -f || true
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: "Build LeadGen API image (clean, no cache) from synced context"
+      ansible.builtin.command:
+        cmd: >
+          podman build --no-cache
+          -t {{ leadgen_image_name }}
+          {{ leadgen_remote_src_dir }}
+      register: podman_build
+
+    - name: "Run LeadGen API container (loopback-only bind)"
+      ansible.builtin.command:
+        cmd: >
+          podman run -d --name {{ leadgen_container_name }}
+          -p {{ leadgen_bind_host }}:{{ leadgen_bind_port }}:{{ leadgen_container_port }}
+          --restart=always
+          {{ leadgen_image_name }}
+      register: podman_run
+
+    - name: "Wait for LeadGen API health to respond (no 502)"
       ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ leadgen_port }}/lead/health"
+        url: "http://{{ leadgen_bind_host }}:{{ leadgen_bind_port }}{{ leadgen_health_path }}"
         method: GET
+        return_content: true
         status_code: 200
-      register: health
-      retries: 30
-      delay: 2
-      until: health.status == 200
+      register: leadgen_health
+      retries: "{{ leadgen_wait_seconds }}"
+      delay: 1
+      until: leadgen_health.status == 200
+
+    - name: "Show health response"
+      ansible.builtin.debug:
+        var: leadgen_health.content

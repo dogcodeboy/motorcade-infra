@@ -33,19 +33,19 @@ This document is the **single source of truth** for build/deploy order across al
    - Status: Ansible YAML, Vault secrets, Postgres roles/schema VERIFIED
    - Proceed next to: `PLAT_04_lead_intake_api.yml`
 10. `PLAT_04_lead_intake_api.yml`
-11. `PLAT_05_people_api.yml`
-12. `PLAT_06_reverse_proxy_routes.yml`
-13. `PLAT_07_backups_postgres_to_s3.yml`
-
+11. `PLAT_05_nginx_reverse_proxy_leadgen_api.yml`
+12. `PLAT_06_people_api.yml`
+13. `PLAT_07_reverse_proxy_routes.yml`
+14. `PLAT_08_backups_postgres_to_s3.yml`
 ### Identity (SSO / directory)
-14. `ID_01_keycloak_bootstrap.yml`
-15. `ID_02_freeipa_directory.yml`
-16. `ID_03_service_accounts_and_rbac.yml`
+15. `ID_01_keycloak_bootstrap.yml`
+16. `ID_02_freeipa_directory.yml`
+17. `ID_03_service_accounts_and_rbac.yml`
 
 ### Mail/Calendar (groupware)
-17. `MAIL_01_mailcow_deploy.yml`
-18. `MAIL_02_imap_migrate.yml`
-19. `MAIL_03_branding.yml`
+18. `MAIL_01_mailcow_deploy.yml`
+19. `MAIL_02_imap_migrate.yml`
+20. `MAIL_03_branding.yml`
 
 ## Acceptance criteria
 A step is "complete" only when:
