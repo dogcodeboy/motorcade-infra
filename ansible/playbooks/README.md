@@ -1,25 +1,10 @@
-# Playbooks
+# Ansible Playbooks (motorcade-infra)
 
-Place new playbooks here using the naming scheme:
-- `WP_..` for WordPress site work
-- `PLAT_..` for platform containers
-- `ID_..` for identity
-- `MAIL_..` for mail/calendar
+This folder contains the Motorcade Infrastructure playbooks.
 
-Each playbook must:
-- be idempotent
-- backup-first if modifying state
-- print restore path
-- verify success
+## Platform Playbooks
 
-## Current playbooks
-
-### Platform
-- `PLAT_02A_networks_volumes_systemd_foundations.yml` — Creates Podman networks, `/srv/motorcade` directories, and the rootful systemd target + prep service.
-- `PLAT_02B_postgres_foundation.yml` — Pulls Postgres image, creates volume + env file, installs **boot-disabled** systemd unit (does **not** start Postgres).
-- `PLAT_02C_postgres_bringup.yml` — Verification-only bring-up checkpoint (service active, container running, healthcheck passes).
-- `PLAT_03_postgres_schema_roles.yml` — Creates Motorcade database + schema + roles (backup-first). Keeps Postgres **boot-disabled**.
-- `PLAT_04A_postgres_connectivity_ro.yml` — Read-only connectivity verification against Postgres. **LOCKED — DO NOT RERUN**.
-- `PLAT_04_lead_intake_api.yml` — Builds + deploys the LeadGen Intake API container (loopback-bound) and validates `/lead/health`.
-- `PLAT_05_nginx_reverse_proxy_leadgen_api.yml` — Deploys NGINX reverse-proxy routes to the loopback LeadGen API and validates via NGINX.
-- `PLAT_06_nginx_http80_canonical_redirect.yml` — Creates a single canonical HTTP:80 redirect vhost for `motorcade.vip` and scrubs/quarantines duplicate port-80 vhost blocks (backup-first).
+- **PLAT_05** — Nginx SSL reverse proxy for LeadGen API (single canonical snippet; quarantine legacy snippets)
+- **PLAT_06A** — Canonicalize HTTP:80 redirect vhost; scrub/quarantine duplicate motorcade.vip port 80 vhosts (robust scrubber)
+- **PLAT_07** — Modernize Nginx http2 directive (original; targeted motorcade_web and may skip if inventory lacks that group)
+- **PLAT_07A** — Modernize Nginx http2 directive (targets inventory group 'motorcade'; supersedes PLAT_07)

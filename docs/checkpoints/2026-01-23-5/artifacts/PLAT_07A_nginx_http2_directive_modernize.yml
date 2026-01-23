@@ -1,0 +1,59 @@
+---
+- name: "PLAT_07A | Modernize nginx http2 syntax in SSL vhost (deprecation cleanup; correct inventory targeting)"
+  hosts: motorcade
+  become: true
+  gather_facts: true
+
+  vars:
+    nginx_ssl_conf: "/etc/nginx/conf.d/motorcade-ssl.conf"
+    nginx_backup_dir: "/etc/nginx/backup"
+    # We only touch the listen line that contains BOTH ssl and http2.
+    listen_http2_regex: '^(\s*listen\s+443\s+ssl\s+)http2(\s*;\s*)$'
+
+  tasks:
+    - name: "Step 0 | Ensure backup dir exists"
+      file:
+        path: "{{ nginx_backup_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: "Step 1 | Backup current SSL conf (timestamped)"
+      copy:
+        src: "{{ nginx_ssl_conf }}"
+        dest: "{{ nginx_backup_dir }}/motorcade-ssl.conf.{{ ansible_date_time.iso8601_basic }}"
+        remote_src: true
+        mode: preserve
+
+    - name: "Step 2 | Replace deprecated 'listen 443 ssl http2;' with 'listen 443 ssl;'"
+      replace:
+        path: "{{ nginx_ssl_conf }}"
+        regexp: "{{ listen_http2_regex }}"
+        replace: '\\1\\2'
+      register: http2_listen_replaced
+
+    - name: "Step 3 | Ensure 'http2 on;' exists inside the server{} block"
+      blockinfile:
+        path: "{{ nginx_ssl_conf }}"
+        marker: "# {mark} PLAT_07_HTTP2_ON"
+        insertafter: '^\s*listen\s+443\s+ssl\s*;\s*$'
+        block: |
+          http2 on;
+      register: http2_on_inserted
+
+    - name: "Step 4 | Validate nginx configuration"
+      command: nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: "Step 5 | Reload nginx (only if config is valid)"
+      service:
+        name: nginx
+        state: reloaded
+      when: nginx_test.rc == 0
+
+    - name: "Step 6 | Show summary"
+      debug:
+        msg:
+          - "listen-line replaced: {{ http2_listen_replaced.changed }}"
+          - "http2 on inserted/ensured: {{ http2_on_inserted.changed }}"
+          - "nginx -t rc: {{ nginx_test.rc }}"

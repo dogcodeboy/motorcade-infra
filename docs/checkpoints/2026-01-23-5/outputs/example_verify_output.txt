@@ -1,0 +1,3 @@
+# Example verify output
+sudo nginx -t
+# expected: no listen...http2 deprecation warning; syntax ok; test successful

@@ -1,0 +1,2 @@
+sudo nginx -t
+# Expect no 'listen ... http2' deprecation warning

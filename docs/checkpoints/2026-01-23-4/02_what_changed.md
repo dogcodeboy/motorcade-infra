@@ -1,0 +1,4 @@
+- Adds PLAT_07 playbook to modernize Nginx http2 syntax in SSL vhost.
+- Adds README_PLAT_07.md documentation.
+- Updates playbooks/README.md index entry.
+- Uses backup + validate + reload-only-if-valid safety pattern.
