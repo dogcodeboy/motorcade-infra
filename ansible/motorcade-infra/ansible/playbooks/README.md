@@ -22,4 +22,4 @@ Each playbook must:
 - `PLAT_04A_postgres_connectivity_ro.yml` — Read-only connectivity verification against Postgres. **LOCKED — DO NOT RERUN**.
 - `PLAT_04_lead_intake_api.yml` — Builds + deploys the LeadGen Intake API container (loopback-bound) and validates `/lead/health`.
 - `PLAT_05_nginx_reverse_proxy_leadgen_api.yml` — Deploys NGINX reverse-proxy routes to the loopback LeadGen API and validates via NGINX.
-- `PLAT_06_nginx_http80_canonical_redirect.yml` — Creates a single canonical HTTP:80 redirect vhost for `motorcade.vip` and scrubs/quarantines duplicate port-80 vhost blocks (backup-first).
+- `PLAT_06_nginx_http80_canonical_redirect.yml` — Canonicalizes a single HTTP:80 motorcade.vip vhost (redirect to HTTPS) and quarantines duplicate port-80 vhosts.

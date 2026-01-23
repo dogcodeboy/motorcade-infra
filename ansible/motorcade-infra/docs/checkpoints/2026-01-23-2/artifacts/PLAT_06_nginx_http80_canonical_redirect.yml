@@ -1,0 +1,94 @@
+---
+- name: "PLAT_06 | Canonicalize HTTP:80 vhost for motorcade.vip (redirect to HTTPS) + quarantine duplicates"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    nginx_conf_dir: "/etc/nginx/conf.d"
+    nginx_backup_dir: "/etc/nginx/backup"
+    canonical_http_conf: "/etc/nginx/conf.d/motorcade-redirect.conf"
+    http_server_names:
+      - "motorcade.vip"
+      - "www.motorcade.vip"
+
+  tasks:
+    - name: "Preflight | Ensure nginx is installed"
+      ansible.builtin.command: nginx -v
+      register: nginx_v
+      changed_when: false
+
+    - name: "Preflight | Ensure backup dir exists"
+      ansible.builtin.file:
+        path: "{{ nginx_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Discover | List *.conf files in conf.d"
+      ansible.builtin.find:
+        paths: "{{ nginx_conf_dir }}"
+        patterns: "*.conf"
+        file_type: file
+      register: confd_find
+
+    - name: "Discover | Read conf.d files"
+      ansible.builtin.slurp:
+        src: "{{ item.path }}"
+      loop: "{{ confd_find.files }}"
+      register: confd_slurp
+
+    - name: "Discover | Build list of HTTP:80 vhosts for motorcade.vip"
+      ansible.builtin.set_fact:
+        http80_motorcade_confs: >-
+          {{
+            (http80_motorcade_confs | default([])) + (
+              [ item.item.path ]
+              if (
+                (item.content | b64decode) is regex_search('(?m)^\s*listen\s+80(\s|;)' )
+                and
+                (
+                  (item.content | b64decode) is regex_search('(?m)^\s*server_name\s+.*\bmotorcade\.vip\b' )
+                )
+              )
+              else []
+            )
+          }}
+      loop: "{{ confd_slurp.results }}"
+
+    - name: "Ensure | Canonical HTTP redirect vhost is present"
+      ansible.builtin.copy:
+        dest: "{{ canonical_http_conf }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (PLAT_06)
+          # Canonical HTTP->HTTPS redirect vhost for motorcade.vip.
+          server {
+              listen 80;
+              listen [::]:80;
+              server_name {{ http_server_names | join(' ') }};
+              return 301 https://$host$request_uri;
+          }
+
+    - name: "Quarantine | Move duplicate HTTP:80 vhosts (except canonical) to backup"
+      ansible.builtin.command: >-
+        mv "{{ item }}"
+           "{{ nginx_backup_dir }}/{{ item | basename }}.{{ ansible_date_time.iso8601_basic_short }}.disabled"
+      loop: "{{ (http80_motorcade_confs | default([])) | difference([canonical_http_conf]) }}"
+      when: (http80_motorcade_confs | default([])) | length > 0
+      register: quarantine_moves
+      changed_when: quarantine_moves is changed
+
+    - name: "Validate | nginx -t"
+      ansible.builtin.command: nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: "Reload | nginx (only if config is valid)"
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
+      when: nginx_test.rc == 0

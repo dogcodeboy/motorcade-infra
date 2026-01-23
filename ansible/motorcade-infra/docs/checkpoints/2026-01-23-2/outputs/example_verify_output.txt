@@ -1,0 +1,4 @@
+# Example verification commands
+
+sudo nginx -t
+curl -i http://motorcade.vip/
