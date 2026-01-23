@@ -1,0 +1,162 @@
+---
+- name: "PLAT_05E | Fix LeadGen proxy injection inside SSL server block (motorcade.vip)"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    ssl_conf_path: "/etc/nginx/conf.d/motorcade-ssl.conf"
+    backup_dir: "/etc/nginx/backup"
+    leadgen_upstream: "http://127.0.0.1:8000"
+    marker_begin: "# BEGIN MOTORCADE LEADGEN PROXY (managed by Ansible)"
+    marker_end: "# END MOTORCADE LEADGEN PROXY (managed by Ansible)"
+
+    proxy_block: |
+      # BEGIN MOTORCADE LEADGEN PROXY (managed by Ansible)
+      location = /api/lead/health {
+        proxy_pass {{ leadgen_upstream }}/lead/health;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+      }
+
+      location /api/lead/ {
+        proxy_pass {{ leadgen_upstream }}/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+      }
+      # END MOTORCADE LEADGEN PROXY (managed by Ansible)
+
+  tasks:
+    - name: "Ensure nginx backup directory exists"
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: "Fail if SSL conf does not exist"
+      ansible.builtin.stat:
+        path: "{{ ssl_conf_path }}"
+      register: ssl_stat
+
+    - name: "Abort if SSL conf missing"
+      ansible.builtin.fail:
+        msg: "SSL vhost conf not found at {{ ssl_conf_path }} (expected from error output)."
+      when: not ssl_stat.stat.exists
+
+    - name: "Backup SSL conf (timestamped)"
+      ansible.builtin.copy:
+        src: "{{ ssl_conf_path }}"
+        dest: "{{ backup_dir }}/motorcade-ssl.conf.{{ ansible_date_time.iso8601_basic_short }}"
+        remote_src: true
+        mode: "0644"
+
+    - name: "Rewrite SSL conf ensuring LeadGen proxy block is inside the server{} that contains server_name motorcade.vip"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import base64, re, sys
+
+        path = "{{ ssl_conf_path }}"
+        begin = "{{ marker_begin }}"
+        end = "{{ marker_end }}"
+        block_b64 = "{{ proxy_block | b64encode }}"
+        block = base64.b64decode(block_b64.encode("utf-8")).decode("utf-8")
+
+        with open(path, "r", encoding="utf-8") as f:
+          s = f.read()
+
+        # Remove any previous managed block (anywhere), to avoid duplicates/invalid placement.
+        pattern = re.compile(re.escape(begin) + r".*?" + re.escape(end), re.DOTALL)
+        s = re.sub(pattern, "", s).strip() + "\n"
+
+        lines = s.splitlines(True)
+
+        nesting = 0
+        in_server = False
+        server_start = None
+        server_nesting = None
+        candidate = None
+        saw_listen_443 = False
+        saw_server_name = False
+
+        def has_server_name(line):
+          return bool(re.search(r'^\s*server_name\s+.*\bmotorcade\.vip\b', line))
+
+        def has_listen_443(line):
+          return bool(re.search(r'^\s*listen\s+.*\b443\b', line))
+
+        for i, line in enumerate(lines):
+          if re.search(r'^\s*server\s*\{', line):
+            in_server = True
+            server_start = i
+            server_nesting = nesting
+            saw_listen_443 = False
+            saw_server_name = False
+
+          if in_server:
+            if has_listen_443(line):
+              saw_listen_443 = True
+            if has_server_name(line):
+              saw_server_name = True
+
+          nesting += line.count("{") - line.count("}")
+
+          # server block ends when nesting returns to server_nesting
+          if in_server and nesting == server_nesting:
+            if saw_listen_443 and saw_server_name:
+              candidate = (server_start, i)
+              break
+            in_server = False
+            server_start = None
+            server_nesting = None
+
+        if not candidate:
+          sys.stderr.write(f"Could not find SSL server block with listen 443 + server_name motorcade.vip in {path}\n")
+          sys.exit(2)
+
+        start, end_idx = candidate
+
+        # Insert before the closing brace of the chosen server block
+        insert_at = end_idx
+        for j in range(end_idx, start, -1):
+          if re.match(r'^\s*\}\s*$', lines[j].strip()):
+            insert_at = j
+            break
+
+        out_lines = []
+        out_lines.extend(lines[:insert_at])
+
+        blk = (block.rstrip() + "\n").splitlines(True)
+        blk = [("  " + ln if ln.strip() else ln) for ln in blk]  # indent 2 spaces
+        out_lines.append("\n")
+        out_lines.extend(blk)
+        out_lines.append("\n")
+
+        out_lines.extend(lines[insert_at:])
+
+        with open(path, "w", encoding="utf-8") as f:
+          f.write("".join(out_lines))
+        PY
+
+    - name: "Validate nginx configuration"
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: "Reload nginx"
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
+
+    - name: "Verify LeadGen health via loopback HTTPS (ignore cert)"
+      ansible.builtin.command: curl -k -sS -o /dev/null -w "%{http_code}" https://127.0.0.1/api/lead/health
+      register: leadgen_health_code
+      changed_when: false
+
+    - name: "Fail if LeadGen health is not HTTP 200"
+      ansible.builtin.fail:
+        msg: "Expected 200 from https://127.0.0.1/api/lead/health but got {{ leadgen_health_code.stdout }}."
+      when: leadgen_health_code.stdout != "200"

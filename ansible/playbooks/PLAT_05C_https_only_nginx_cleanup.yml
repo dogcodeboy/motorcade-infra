@@ -1,0 +1,91 @@
+---
+- name: "PLAT_05C | HTTPS-only Nginx cleanup (sanitize motorcade.conf + disable legacy leadgen conf)"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    nginx_backup_dir: /etc/nginx/backup
+    nginx_disabled_dir: /etc/nginx/conf.d/disabled
+    motorcade_http_conf: /etc/nginx/conf.d/motorcade.conf
+    legacy_leadgen_conf: /etc/nginx/conf.d/motorcade-leadgen-api.conf
+
+    # HTTPS-only: keep port 80 as redirect stub only
+    motorcade_http_redirect_conf: |
+      # Managed by Ansible (PLAT_05C). HTTPS-only enforcement.
+      # Purpose: HTTP (80) redirects to HTTPS. Do not place location blocks here.
+      server {
+          listen 80;
+          listen [::]:80;
+          server_name motorcade.vip www.motorcade.vip;
+          return 301 https://$host$request_uri;
+      }
+
+  tasks:
+    - name: Ensure backup directory exists
+      ansible.builtin.file:
+        path: "{{ nginx_backup_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Ensure nginx disabled directory exists (for legacy conf quarantine)
+      ansible.builtin.file:
+        path: "{{ nginx_disabled_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Stat motorcade HTTP conf
+      ansible.builtin.stat:
+        path: "{{ motorcade_http_conf }}"
+      register: motorcade_http_conf_stat
+
+    - name: Backup current motorcade HTTP conf (timestamped) if present
+      ansible.builtin.copy:
+        src: "{{ motorcade_http_conf }}"
+        dest: "{{ nginx_backup_dir }}/motorcade.conf.{{ ansible_date_time.iso8601_basic_short }}"
+        remote_src: true
+        mode: "0644"
+      when: motorcade_http_conf_stat.stat.exists
+
+    - name: Write clean HTTP->HTTPS redirect stub to motorcade.conf (overwrite)
+      ansible.builtin.copy:
+        dest: "{{ motorcade_http_conf }}"
+        content: "{{ motorcade_http_redirect_conf }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Stat legacy LeadGen nginx conf (may contain top-level location)
+      ansible.builtin.stat:
+        path: "{{ legacy_leadgen_conf }}"
+      register: legacy_leadgen_conf_stat
+
+    - name: Backup legacy LeadGen nginx conf (timestamped) if present
+      ansible.builtin.copy:
+        src: "{{ legacy_leadgen_conf }}"
+        dest: "{{ nginx_backup_dir }}/motorcade-leadgen-api.conf.{{ ansible_date_time.iso8601_basic_short }}"
+        remote_src: true
+        mode: "0644"
+      when: legacy_leadgen_conf_stat.stat.exists
+
+    - name: Quarantine legacy LeadGen nginx conf out of conf.d (so nginx cannot parse it)
+      ansible.builtin.command:
+        cmd: "mv -f {{ legacy_leadgen_conf }} {{ nginx_disabled_dir }}/motorcade-leadgen-api.conf.disabled"
+      when: legacy_leadgen_conf_stat.stat.exists
+
+    - name: Validate nginx configuration
+      ansible.builtin.command:
+        cmd: nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: Reload nginx (only if config is valid)
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
+
+    - name: Show nginx -t output (for runbook visibility)
+      ansible.builtin.debug:
+        msg:
+          - "nginx -t stdout: {{ nginx_test.stdout | default('') }}"
+          - "nginx -t stderr: {{ nginx_test.stderr | default('') }}"

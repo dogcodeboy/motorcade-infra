@@ -1,0 +1,128 @@
+---
+# PLAT_05D — HTTPS-only proxy routes for LeadGen inside the real 443 vhost (motorcade.vip)
+# Why: If /api/lead/health returns a WordPress 404, nginx is not proxying that path.
+# This playbook injects location blocks INSIDE the SSL server{} that serves motorcade.vip.
+
+- name: PLAT_05D | Inject LeadGen proxy routes into SSL vhost (motorcade.vip)
+  hosts: all
+  become: true
+
+  vars:
+    nginx_conf_dir: /etc/nginx/conf.d
+    backup_dir: /etc/nginx/backup
+
+    leadgen_upstream_host: "127.0.0.1"
+    leadgen_upstream_port: "8000"
+
+    marker_tag: "MOTORCADE_LEADGEN_PROXY_SSL"
+
+  tasks:
+    - name: Check SELinux status
+      command: getenforce
+      register: selinux_status
+      changed_when: false
+
+    - name: Allow nginx to proxy to upstream (SELinux boolean)
+      command: setsebool -P httpd_can_network_connect on
+      when: selinux_status.stdout != "Disabled"
+
+    - name: Ensure backup directory exists
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Detect SSL vhost conf that serves motorcade.vip on 443
+      shell: |
+        set -euo pipefail
+        # Return first file that contains BOTH: listen 443 and server_name with motorcade.vip
+        for f in "{{ nginx_conf_dir }}"/*.conf; do
+          [ -f "$f" ] || continue
+          if grep -Eq '^[[:space:]]*listen[[:space:]]+443' "$f" \
+            && grep -Eq '^[[:space:]]*server_name[[:space:]].*\bmotorcade\.vip\b' "$f"; then
+            echo "$f"
+            exit 0
+          fi
+        done
+        exit 1
+      args:
+        executable: /bin/bash
+      register: ssl_vhost_path
+      changed_when: false
+
+    - name: Fail if SSL vhost not found (no .conf with listen 443 + server_name motorcade.vip)
+      fail:
+        msg: "Could not find SSL vhost .conf in {{ nginx_conf_dir }} containing both 'listen 443' and 'server_name ... motorcade.vip'."
+      when: ssl_vhost_path.rc != 0
+
+    - name: Set ssl_vhost_file fact
+      set_fact:
+        ssl_vhost_file: "{{ ssl_vhost_path.stdout | trim }}"
+
+    - name: Backup SSL vhost conf (timestamped)
+      copy:
+        src: "{{ ssl_vhost_file }}"
+        dest: "{{ backup_dir }}/{{ (ssl_vhost_file | basename) }}.{{ ansible_date_time.iso8601_basic_short }}.bak"
+        remote_src: true
+        mode: "0644"
+
+    - name: Remove any prior injected LeadGen proxy block (marker-based)
+      blockinfile:
+        path: "{{ ssl_vhost_file }}"
+        marker: "# {mark} {{ marker_tag }}"
+        state: absent
+
+    - name: Insert LeadGen proxy routes inside SSL server block (after server_name)
+      blockinfile:
+        path: "{{ ssl_vhost_file }}"
+        insertafter: '^[[:space:]]*server_name[[:space:]].*\bmotorcade\.vip\b.*;'
+        marker: "# {mark} {{ marker_tag }}"
+        block: |
+          # LeadGen API reverse proxy (HTTPS-only)
+          # Ensures nginx handles /api/lead/* before WordPress routing.
+          location = /api/lead/health {
+            proxy_pass http://{{ leadgen_upstream_host }}:{{ leadgen_upstream_port }}/lead/health;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+          }
+
+          location ^~ /api/lead/ {
+            proxy_pass http://{{ leadgen_upstream_host }}:{{ leadgen_upstream_port }}/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 5s;
+            proxy_send_timeout 30s;
+            proxy_read_timeout 30s;
+          }
+
+    - name: Validate nginx configuration
+      command: nginx -t
+
+    - name: Reload nginx
+      service:
+        name: nginx
+        state: reloaded
+
+    - name: Verify LeadGen health via local HTTPS (ignore cert)
+      shell: |
+        set -euo pipefail
+        curl -k -sS -o /dev/null -w '%{http_code}' https://127.0.0.1/api/lead/health
+      args:
+        executable: /bin/bash
+      register: health_code
+      changed_when: false
+
+    - name: Show health HTTP status code
+      debug:
+        msg: "LeadGen health via https://127.0.0.1/api/lead/health returned HTTP {{ health_code.stdout }}"
+
+    - name: Fail if LeadGen health is not HTTP 200
+      fail:
+        msg: "Expected HTTP 200 from https://127.0.0.1/api/lead/health but got {{ health_code.stdout | trim }}."
+      when: (health_code.stdout | trim) != '200'

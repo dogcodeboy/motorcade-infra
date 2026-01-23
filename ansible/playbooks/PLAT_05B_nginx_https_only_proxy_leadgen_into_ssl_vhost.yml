@@ -1,0 +1,139 @@
+---
+# PLAT_05B — HTTPS-only exposure of LeadGen API via the main Motorcade SSL vhost
+# Purpose:
+#   - Keep LeadGen container bound to 127.0.0.1:8000 (PLAT_04)
+#   - Expose /api/lead/* ONLY via the HTTPS vhost that serves motorcade.vip
+#   - Disable any standalone conf.d proxy file that could break nginx parsing (e.g., motorcade-leadgen-api.conf)
+#
+# Outcomes:
+#   - https://motorcade.vip/api/lead/health returns LeadGen /lead/health
+#   - No extra listener ports (no 8085 public exposure)
+#   - Nginx config validates and reloads cleanly
+#
+- name: PLAT_05B | HTTPS-only Nginx proxy for LeadGen API (motorcade.vip SSL vhost)
+  hosts: all
+  become: true
+
+  vars:
+    leadgen_upstream_host: "127.0.0.1"
+    leadgen_upstream_port: "8000"
+
+    nginx_conf_dir: "/etc/nginx/conf.d"
+    backup_dir: "/etc/nginx/backup"
+
+    # Legacy/experimental file written by PLAT_05 in some iterations (can be kept, but must not break nginx parsing).
+    legacy_leadgen_conf: "/etc/nginx/conf.d/motorcade-leadgen-api.conf"
+
+    # Marker for idempotent insert/remove
+    leadgen_marker: "MOTORCADE_LEADGEN_PROXY"
+
+  tasks:
+    - name: Ensure backup directory exists
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Detect SSL vhost conf that serves motorcade.vip on 443
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for f in {{ nginx_conf_dir }}/*.conf; do
+          [ -f "$f" ] || continue
+          if grep -qE '^\s*listen\s+443(\s|;)' "$f" && grep -qE '^\s*server_name\s+.*motorcade\.vip(\s|;)' "$f"; then
+            echo "$f"
+            exit 0
+          fi
+        done
+        exit 1
+      args:
+        executable: /bin/bash
+      register: ssl_vhost_detect
+      changed_when: false
+
+    - name: Fail if SSL vhost not found (no conf.d file with listen 443 + server_name motorcade.vip)
+      ansible.builtin.fail:
+        msg: >-
+          Could not find an SSL vhost in {{ nginx_conf_dir }}/*.conf containing BOTH:
+          (1) listen 443 ... and (2) server_name ... motorcade.vip.
+          Expected something like /etc/nginx/conf.d/motorcade-ssl.conf.
+      when: ssl_vhost_detect.rc != 0
+
+    - name: Set ssl_vhost_path fact
+      ansible.builtin.set_fact:
+        ssl_vhost_path: "{{ ssl_vhost_detect.stdout | trim }}"
+
+    - name: Backup SSL vhost conf (timestamped)
+      ansible.builtin.copy:
+        src: "{{ ssl_vhost_path }}"
+        dest: "{{ backup_dir }}/{{ (ssl_vhost_path | basename) }}.{{ ansible_date_time.iso8601_basic_short }}.bak"
+        remote_src: true
+
+    - name: Backup legacy LeadGen conf if present (timestamped)
+      ansible.builtin.copy:
+        src: "{{ legacy_leadgen_conf }}"
+        dest: "{{ backup_dir }}/{{ (legacy_leadgen_conf | basename) }}.{{ ansible_date_time.iso8601_basic_short }}.bak"
+        remote_src: true
+      when: legacy_leadgen_conf is file
+
+    - name: Disable legacy LeadGen conf if present (move out of conf.d so nginx can't parse it)
+      ansible.builtin.command: >
+        mv -f {{ legacy_leadgen_conf }} {{ backup_dir }}/{{ (legacy_leadgen_conf | basename) }}.DISABLED.{{ ansible_date_time.iso8601_basic_short }}
+      when: legacy_leadgen_conf is file
+
+    # Remove any old/incorrect LeadGen block we previously inserted into SSL vhost (safe, idempotent)
+    - name: Remove any prior LeadGen proxy block from SSL vhost (marker-based)
+      ansible.builtin.blockinfile:
+        path: "{{ ssl_vhost_path }}"
+        marker: "# {mark} {{ leadgen_marker }}"
+        state: absent
+
+    - name: Insert LeadGen reverse proxy locations into SSL vhost (inside server block)
+      ansible.builtin.blockinfile:
+        path: "{{ ssl_vhost_path }}"
+        marker: "# {mark} {{ leadgen_marker }}"
+        insertafter: '^\s*server_name\s+.*motorcade\.vip(\s|;)'
+        block: |
+          # LeadGen Intake API (PLAT_04) — HTTPS-only reverse proxy
+          # NOTE: LeadGen container listens on {{ leadgen_upstream_host }}:{{ leadgen_upstream_port }} on localhost.
+          location = /api/lead/health {
+            proxy_pass http://{{ leadgen_upstream_host }}:{{ leadgen_upstream_port }}/lead/health;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+          }
+
+          location /api/lead/ {
+            proxy_pass http://{{ leadgen_upstream_host }}:{{ leadgen_upstream_port }}/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 5s;
+            proxy_send_timeout 30s;
+            proxy_read_timeout 30s;
+          }
+
+    - name: Validate nginx configuration
+      ansible.builtin.command: nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: Reload nginx
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
+
+    - name: Verify LeadGen health via local HTTPS vhost proxy (loopback)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1/api/lead/health"
+        validate_certs: false
+        return_content: true
+        status_code: 200
+      register: leadgen_health
+
+    - name: Show health response (truncated)
+      ansible.builtin.debug:
+        msg: "{{ (leadgen_health.content | default(''))[:300] }}"
