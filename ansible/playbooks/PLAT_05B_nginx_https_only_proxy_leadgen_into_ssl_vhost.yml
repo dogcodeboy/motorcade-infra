@@ -1,3 +1,7 @@
+# ⛔ PROHIBITED — DO NOT RUN
+# Reason: nginx is frozen (see docs/RUNBOOK.md). Reverse-proxy/routing changes are deferred.
+# Provenance: docs/checkpoints/2026-01-23-5/
+
 ---
 # PLAT_05B — HTTPS-only exposure of LeadGen API via the main Motorcade SSL vhost
 # Purpose:

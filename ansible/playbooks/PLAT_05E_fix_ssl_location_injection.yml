@@ -1,3 +1,7 @@
+# ⛔ PROHIBITED — DO NOT RUN
+# Reason: nginx is frozen (see docs/RUNBOOK.md). Reverse-proxy/routing changes are deferred.
+# Provenance: docs/checkpoints/2026-01-23-5/
+
 ---
 - name: "PLAT_05E | Fix LeadGen proxy injection inside SSL server block (motorcade.vip)"
   hosts: all
