@@ -1,3 +1,6 @@
+# ⚠️ QUARANTINED — DO NOT RUN (nginx is frozen per docs/RUNBOOK.md)
+# This playbook is retained for historical context only.
+
 ---
 - name: "PLAT_07 | Modernize nginx http2 syntax in SSL vhost (non-blocking deprecation cleanup)"
   hosts: motorcade_web

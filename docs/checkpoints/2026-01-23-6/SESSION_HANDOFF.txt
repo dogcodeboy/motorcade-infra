@@ -1,0 +1,4 @@
+SESSION HANDOFF — motorcade-infra
+
+RUNBOOK updated at motorcade-infra/docs/RUNBOOK.md.
+nginx frozen. Next step: PLAT_07 Podman foundation.

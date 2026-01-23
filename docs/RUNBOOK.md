@@ -28,15 +28,22 @@ This document is the **single source of truth** for build/deploy order across al
 8. `PLAT_03_postgres_schema_roles.yml` (schema + roles; still no app wiring)
 9. `PLAT_04A_postgres_connectivity_ro.yml` (read-only connectivity verification)
    - **LOCKED — DO NOT RERUN**
-   - Checkpoint: `docs/checkpoints/2026-01-20-PLAT_04A/`
-   - Root cause resolved: Podman container name mismatch (correct container: `motorcade-postgres`)
-   - Status: Ansible YAML, Vault secrets, Postgres roles/schema VERIFIED
-   - Proceed next to: `PLAT_04_lead_intake_api.yml`
-10. `PLAT_04_lead_intake_api.yml`
-11. `PLAT_05_nginx_reverse_proxy_leadgen_api.yml`
-12. `PLAT_06_people_api.yml`
-13. `PLAT_07_reverse_proxy_routes.yml`
-14. `PLAT_08_backups_postgres_to_s3.yml`
+   - Status: Postgres roles/schema + RO connectivity VERIFIED
+   - Proceed next to: **Podman foundation** (see PLAT_08A below)
+
+10. `PLAT_06A_nginx_http80_canonical_redirect.yml` (**FINAL — nginx frozen**)
+   - Checkpoint: `docs/checkpoints/2026-01-23-5/`
+   - Note: One warning about `listen ... http2` deprecation is acceptable and final.
+
+11. `PLAT_08A_podman_container_services_foundation.yml` (**NEXT EXECUTION POINT**)
+   - Purpose: baseline Podman runtime + networks/volumes + systemd integration for containers
+   - Reason for numbering: `PLAT_07*` in repo is legacy nginx http2 “modernize” work and is **quarantined / prohibited** due to nginx freeze.
+
+12. `PLAT_04_lead_intake_api.yml` (**DEFERRED** — requires PLAT_08A first)
+13. `PLAT_05_nginx_reverse_proxy_leadgen_api.yml` (**DEFERRED / PROHIBITED** — nginx frozen)
+14. `PLAT_07_reverse_proxy_routes.yml` (**DEFERRED / PROHIBITED** — nginx frozen)
+15. `PLAT_08_backups_postgres_to_s3.yml` (allowed once container foundation is complete)
+
 ### Identity (SSO / directory)
 15. `ID_01_keycloak_bootstrap.yml`
 16. `ID_02_freeipa_directory.yml`
@@ -46,6 +53,18 @@ This document is the **single source of truth** for build/deploy order across al
 18. `MAIL_01_mailcow_deploy.yml`
 19. `MAIL_02_imap_migrate.yml`
 20. `MAIL_03_branding.yml`
+
+## Quarantined / Prohibited Items
+
+### Nginx http2 “modernize” playbooks (DO NOT RUN)
+These exist in the repo for historical context but are prohibited because nginx is frozen:
+- `ansible/playbooks/PLAT_07_nginx_http2_directive_modernize.yml`
+- `ansible/playbooks/PLAT_07A_nginx_http2_directive_modernize.yml`
+
+### Reverse proxy routing playbooks (DEFERRED)
+Any playbooks that modify nginx routing are deferred until an explicit future checkpoint authorizes reopening nginx.
+
+---
 
 ## Acceptance criteria
 A step is "complete" only when:

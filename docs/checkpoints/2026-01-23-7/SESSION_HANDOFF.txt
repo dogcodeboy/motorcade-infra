@@ -1,0 +1,13 @@
+SESSION HANDOFF — CLEANUP (Docs-only)
+
+- Updated motorcade-infra/docs/RUNBOOK.md to match current platform reality:
+  - nginx frozen; PLAT_06A final
+  - next execution point: PLAT_08A Podman/container services foundation
+  - PLAT_07 nginx http2 modernize quarantined
+  - reverse-proxy routing playbooks deferred/prohibited until nginx is explicitly reopened
+
+- Added canonical runbook index files:
+  - motorcade.vip/docs/runbooks/00_CANONICAL_RUNBOOK_INDEX.md
+  - motorcade-leadgen/recovery/runbooks/00_CANONICAL_RUNBOOK_INDEX.md
+
+Next session: generate PLAT_08A playbook + checkpoint per RUNBOOK.
