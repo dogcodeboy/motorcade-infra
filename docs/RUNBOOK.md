@@ -79,3 +79,41 @@ Nginx/SSL/HTTP2 is **frozen and verified**. Do not reopen or “fix” http2 war
 
 ## Next Subsystem (Non-nginx)
 Proceed with **Podman / container services** and platform orchestration work (e.g., PLAT_08A+).
+
+
+---
+## Platform Progress — Current State (Append-Only)
+
+### Completed
+- PLAT_08B — Redis / Queue Foundation
+  - Redis installed as internal-only foundation service
+  - Runtime: rootful Podman (manual/static install; non-dnf)
+  - systemd unit installed disabled + stopped by default
+  - Network: motorcade-core
+  - Persistent volume: /srv/motorcade/volumes/redis
+- PLAT_08C — Redis bring-up + readiness health gate (dependent-services safe)
+  - Enables + starts motorcade-redis.service
+  - Installs readiness script + oneshot unit: motorcade-redis-ready.service
+  - Verifies redis-cli ping from inside container
+
+- PLAT_08C.1 — Redis volume permissions invariant (status=126 fix)
+  - Enforces /srv/motorcade/volumes/redis ownership + permissions for container UID/GID 999
+  - Restarts motorcade-redis.service only if permissions changed
+  - Re-runs readiness gate and asserts Result=success
+
+
+### Active / Next
+- PLAT_08C — Redis bring-up + health gate for dependent services
+  - Explicit enable/start
+  - Readiness and dependency verification
+
+- UPDATE (2026-01-24): PLAT_08C completed; permissions invariant handled by PLAT_08C.1
+- Next: PLAT_08D — first Redis-dependent service integration
+
+### Notes
+- Nginx stack remains frozen and verified; do not reopen.
+- Canonical deprecation policy remains in effect.
+- Platform remains in foundation phase; services are installed before activation.
+
+### Operator Guidance
+- Refer to `docs/user-preferences.md` for authoritative session and build preferences.

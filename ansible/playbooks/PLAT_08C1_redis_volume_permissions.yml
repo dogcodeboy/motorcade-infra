@@ -1,0 +1,146 @@
+---
+- name: "PLAT_08C.1 | Redis volume permissions invariant (fix status=126; readiness gate unblocks)"
+  hosts: motorcade_platform
+  become: true
+  gather_facts: true
+
+  vars:
+    # Non-negotiable per docs/user-preferences.md
+    podman_bin: /usr/local/bin/podman
+
+    # Keep aligned with PLAT_08B
+    redis_container: "motorcade-redis"
+    redis_service: "motorcade-redis.service"
+    motorcade_root: "/srv/motorcade"
+    redis_volume_host: "{{ motorcade_root }}/volumes/redis"
+
+    # Redis official image defaults to uid/gid 999. If /data is not writable,
+    # the container fails to start (commonly exit status=126/permission).
+    redis_uid: "999"
+    redis_gid: "999"
+    redis_mode: "0700"
+
+    # Readiness gate artifacts (installed by PLAT_08C)
+    readiness_unit: "motorcade-redis-ready.service"
+    readiness_script: "/usr/local/sbin/motorcade-wait-redis.sh"
+
+  tasks:
+    - name: "Preflight | Ensure podman exists at locked path"
+      ansible.builtin.stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+
+    - name: "Preflight | Fail if podman missing"
+      ansible.builtin.fail:
+        msg: >-
+          Expected rootful Podman at {{ podman_bin }} (manual/static install; non-dnf) but it was not found.
+          Install Podman via the established static bundle method, then re-run.
+      when: not podman_stat.stat.exists
+
+    - name: "Preflight | Verify redis unit exists (PLAT_08B)"
+      ansible.builtin.command: "systemctl cat {{ redis_service }}"
+      register: redis_cat
+      changed_when: false
+      failed_when: redis_cat.rc != 0
+
+    - name: "Preflight | Verify readiness gate unit exists (PLAT_08C)"
+      ansible.builtin.command: "systemctl cat {{ readiness_unit }}"
+      register: gate_cat
+      changed_when: false
+      failed_when: gate_cat.rc != 0
+
+    - name: "Preflight | Verify readiness script exists (PLAT_08C)"
+      ansible.builtin.stat:
+        path: "{{ readiness_script }}"
+      register: gate_script_stat
+
+    - name: "Preflight | Fail if readiness script missing"
+      ansible.builtin.fail:
+        msg: >-
+          Expected readiness script at {{ readiness_script }} but it was not found.
+          Run PLAT_08C first to install the health gate, then re-run PLAT_08C.1.
+      when: not gate_script_stat.stat.exists
+
+    - name: "Filesystem | Ensure redis volume directory exists"
+      ansible.builtin.file:
+        path: "{{ redis_volume_host }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Filesystem | Enforce redis volume owner/group and permissions (uid/gid 999)"
+      ansible.builtin.file:
+        path: "{{ redis_volume_host }}"
+        state: directory
+        owner: "{{ redis_uid }}"
+        group: "{{ redis_gid }}"
+        mode: "{{ redis_mode }}"
+        recurse: true
+      register: perm_fix
+
+    - name: "systemd | Restart redis service if permissions changed"
+      ansible.builtin.systemd:
+        name: "{{ redis_service }}"
+        state: restarted
+      when: perm_fix.changed
+
+    - name: "Verify | Ensure redis service is active"
+      ansible.builtin.command: "systemctl is-active {{ redis_service }}"
+      register: redis_active
+      changed_when: false
+      failed_when: redis_active.stdout.strip() != "active"
+
+    - name: "Verify | Ensure redis container is running (podman ps)"
+      ansible.builtin.command: >-
+        {{ podman_bin }} ps
+        --filter name={{ redis_container }}
+        --format {{'{{'}}.Status{{'}}'}}
+      register: redis_ps
+      changed_when: false
+      failed_when: "'Up' not in redis_ps.stdout"
+
+    - name: "Verify | Redis ping"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ podman_bin }} exec {{ redis_container }} redis-cli ping
+      args:
+        executable: /bin/bash
+      register: ping_out
+      changed_when: false
+      failed_when: ping_out.stdout.strip() != "PONG"
+
+    - name: "Health gate | Reset failed state"
+      ansible.builtin.command: "systemctl reset-failed {{ readiness_unit }}"
+      changed_when: false
+      failed_when: false
+
+    - name: "Health gate | Run readiness gate now"
+      ansible.builtin.command: "systemctl start {{ readiness_unit }}"
+      register: gate_start
+      changed_when: false
+      failed_when: gate_start.rc != 0
+
+    - name: "Health gate | Assert readiness gate result=success"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        result="$(systemctl show -p Result --value {{ readiness_unit }})"
+        if [ "$result" != "success" ]; then
+          systemctl status {{ readiness_unit }} --no-pager || true
+          journalctl -u {{ readiness_unit }} -n 80 --no-pager || true
+          echo "Readiness gate Result=$result"
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: "Verify | Print summary"
+      ansible.builtin.debug:
+        msg:
+          - "Redis volume: {{ redis_volume_host }} owner={{ redis_uid }}:{{ redis_gid }} mode={{ redis_mode }}"
+          - "Redis service: {{ redis_service }} is active"
+          - "Redis container: {{ redis_container }} is running"
+          - "Redis ping: {{ ping_out.stdout.strip() }}"
+          - "Readiness gate: {{ readiness_unit }} Result=success"
+          - "Next: proceed to PLAT_08D (first Redis-dependent service wiring)."
