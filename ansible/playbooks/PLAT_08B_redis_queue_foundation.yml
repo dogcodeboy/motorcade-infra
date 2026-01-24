@@ -1,0 +1,149 @@
+---
+- name: "PLAT_08B | Redis / Queue Foundation (systemd unit installed; disabled by default)"
+  hosts: motorcade_platform
+  become: true
+  gather_facts: true
+
+  vars:
+    podman_bin: /usr/local/bin/podman
+    platform_target: "motorcade-platform.target"
+    prep_service: "motorcade-platform-prep.service"
+
+    redis_container: "motorcade-redis"
+    redis_service: "motorcade-redis.service"
+    redis_image: "docker.io/library/redis:7.2-alpine"
+    redis_network: "motorcade-core"
+
+    motorcade_root: "/srv/motorcade"
+    redis_volume_host: "{{ motorcade_root }}/volumes/redis"
+    redis_data_container: "/data"
+
+    redis_appendonly: "yes"
+    redis_save_rules: "60 1000"
+
+    redis_enable_on_boot: false
+    redis_start_now: false
+
+  tasks:
+    - name: "Preflight | Ensure podman exists at locked path"
+      ansible.builtin.stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+
+    - name: "Preflight | Fail if podman missing"
+      ansible.builtin.fail:
+        msg: >-
+          Expected rootful Podman at {{ podman_bin }} (manual install / PLAT_01B) but it was not found.
+          Do not use dnf. Install Podman via the established static bundle method, then re-run.
+      when: not podman_stat.stat.exists
+
+    - name: "Preflight | Podman version"
+      ansible.builtin.command: "{{ podman_bin }} --version"
+      register: podman_version
+      changed_when: false
+
+    - name: "Preflight | Verify platform prep service unit is installed (PLAT_02A)"
+      ansible.builtin.command: "systemctl cat {{ prep_service }}"
+      register: prep_cat
+      changed_when: false
+      failed_when: prep_cat.rc != 0
+
+    - name: "Preflight | Verify required podman network exists"
+      ansible.builtin.command: "{{ podman_bin }} network exists {{ redis_network }}"
+      register: net_exists
+      changed_when: false
+      failed_when: net_exists.rc != 0
+
+    - name: "Filesystem | Ensure redis volume directory exists"
+      ansible.builtin.file:
+        path: "{{ redis_volume_host }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Image | Pull redis image (idempotent)"
+      ansible.builtin.command: "{{ podman_bin }} pull {{ redis_image }}"
+      register: pull_out
+      changed_when: "'Skipping' not in pull_out.stdout"
+
+    - name: "systemd | Install {{ redis_service }} (foundation; disabled by default)"
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ redis_service }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade Redis (internal queue/cache) - foundation
+          After=network-online.target
+          Wants=network-online.target
+          Requires={{ platform_target }}
+
+          [Service]
+          Type=simple
+          ExecStartPre=-{{ podman_bin }} rm -f {{ redis_container }}
+          ExecStart={{ podman_bin }} run --name {{ redis_container }} \
+            --network {{ redis_network }} \
+            --log-driver journald \
+            -v {{ redis_volume_host }}:{{ redis_data_container }}:Z \
+            {{ redis_image }} \
+            redis-server --appendonly {{ redis_appendonly }} --save "{{ redis_save_rules }}"
+
+          ExecStop={{ podman_bin }} stop -t 10 {{ redis_container }}
+          ExecStopPost=-{{ podman_bin }} rm -f {{ redis_container }}
+          Restart=on-failure
+          RestartSec=3
+
+          [Install]
+          WantedBy={{ platform_target }}
+
+    - name: "systemd | Reload daemon"
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: "systemd | Enforce foundation enablement state"
+      ansible.builtin.systemd:
+        name: "{{ redis_service }}"
+        enabled: "{{ redis_enable_on_boot | bool }}"
+        state: "{{ 'started' if (redis_start_now | bool) else 'stopped' }}"
+
+    - name: "Verify | Get redis service enablement state"
+      ansible.builtin.command: "systemctl is-enabled {{ redis_service }}"
+      register: redis_enabled_state
+      changed_when: false
+      failed_when: false
+
+    - name: "Verify | Assert redis service is disabled (foundation default)"
+      ansible.builtin.fail:
+        msg: "motorcade-redis.service must be disabled in foundation phase"
+      when:
+        - not redis_enable_on_boot | bool
+        - redis_enabled_state.stdout.strip() != "disabled"
+
+    - name: "Verify | Assert redis service is enabled (override mode)"
+      ansible.builtin.fail:
+        msg: "motorcade-redis.service must be enabled when redis_enable_on_boot=true"
+      when:
+        - redis_enable_on_boot | bool
+        - redis_enabled_state.stdout.strip() != "enabled"
+
+    - name: "Verify | If started, assert redis is reachable via redis-cli ping"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ podman_bin }} exec {{ redis_container }} redis-cli ping
+      args:
+        executable: /bin/bash
+      register: ping_out
+      changed_when: false
+      when: redis_start_now | bool
+
+    - name: "Verify | Print summary"
+      ansible.builtin.debug:
+        msg:
+          - "{{ podman_version.stdout }}"
+          - "Redis image: {{ redis_image }}"
+          - "Unit: /etc/systemd/system/{{ redis_service }} (enabled={{ redis_enable_on_boot }}, started={{ redis_start_now }})"
+          - "Volume: {{ redis_volume_host }} -> {{ redis_data_container }} (persistent)"
+          - "Network: {{ redis_network }} (internal-only)"
+          - "Next: PLAT_08C will start + verify redis for dependent services (or set redis_start_now=true)."

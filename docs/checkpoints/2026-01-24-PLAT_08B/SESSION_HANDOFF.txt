@@ -1,0 +1,14 @@
+SESSION HANDOFF — motorcade-infra
+
+Checkpoint: 2026-01-24-PLAT_08B
+Status: ✅ COMPLETE (success)
+
+Summary:
+- Redis foundation playbook is now clean and idempotent.
+- Installs systemd unit `motorcade-redis.service` using `/usr/local/bin/podman` (non-dnf runtime).
+- Internal-only network: `motorcade-core`
+- Persistent volume: `/srv/motorcade/volumes/redis -> /data`
+- Default posture: disabled + stopped (foundation)
+
+Next:
+- PLAT_08C — Redis bring-up + health gate for dependent services.
