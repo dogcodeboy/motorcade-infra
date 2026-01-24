@@ -1,0 +1,142 @@
+---
+- name: "PLAT_08C | Redis bring-up + health gate (readiness unit for dependent services)"
+  hosts: motorcade_platform
+  become: true
+  gather_facts: true
+
+  vars:
+    podman_bin: /usr/local/bin/podman
+    platform_target: "motorcade-platform.target"
+
+    redis_container: "motorcade-redis"
+    redis_service: "motorcade-redis.service"
+    redis_network: "motorcade-core"
+
+    # Health gate components created by this playbook
+    redis_ready_script: "/usr/local/sbin/motorcade-wait-redis.sh"
+    redis_ready_service: "motorcade-redis-ready.service"
+
+    # Start/enable Redis for platform services
+    redis_enable_on_boot: true
+    redis_start_now: true
+
+    # Readiness behavior
+    redis_ready_timeout_seconds: 60
+    redis_ready_sleep_seconds: 2
+
+  tasks:
+    - name: "Preflight | Ensure podman exists at locked path"
+      ansible.builtin.stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+
+    - name: "Preflight | Fail if podman missing"
+      ansible.builtin.fail:
+        msg: >-
+          Expected rootful Podman at {{ podman_bin }} (manual install / PLAT_01B) but it was not found.
+          Do not use dnf. Install Podman via the established static bundle method, then re-run.
+      when: not podman_stat.stat.exists
+
+    - name: "Preflight | Verify redis unit exists (PLAT_08B)"
+      ansible.builtin.command: "systemctl cat {{ redis_service }}"
+      register: redis_unit_cat
+      changed_when: false
+      failed_when: redis_unit_cat.rc != 0
+
+    - name: "Preflight | Verify required podman network exists"
+      ansible.builtin.command: "{{ podman_bin }} network exists {{ redis_network }}"
+      register: net_exists
+      changed_when: false
+      failed_when: net_exists.rc != 0
+
+    - name: "systemd | Enable + start redis (explicit bring-up)"
+      ansible.builtin.systemd:
+        name: "{{ redis_service }}"
+        enabled: "{{ redis_enable_on_boot | bool }}"
+        state: "{{ 'started' if (redis_start_now | bool) else 'stopped' }}"
+
+    - name: "Health gate | Install redis wait script"
+      ansible.builtin.copy:
+        dest: "{{ redis_ready_script }}"
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          PODMAN="{{ podman_bin }}"
+          CONTAINER="{{ redis_container }}"
+          TIMEOUT="{{ redis_ready_timeout_seconds }}"
+          SLEEP="{{ redis_ready_sleep_seconds }}"
+
+          end=$(( $(date +%s) + TIMEOUT ))
+
+          while true; do
+            if "$PODMAN" exec "$CONTAINER" redis-cli ping >/dev/null 2>&1; then
+              exit 0
+            fi
+            if [ "$(date +%s)" -ge "$end" ]; then
+              echo "Timed out waiting for redis readiness (container=$CONTAINER, timeout=${TIMEOUT}s)" >&2
+              exit 1
+            fi
+            sleep "$SLEEP"
+          done
+
+    - name: "Health gate | Install redis ready systemd oneshot"
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ redis_ready_service }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade Redis readiness gate (blocks dependent services until Redis responds)
+          After={{ redis_service }}
+          Requires={{ redis_service }}
+          Requires={{ platform_target }}
+
+          [Service]
+          Type=oneshot
+          ExecStart={{ redis_ready_script }}
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy={{ platform_target }}
+
+    - name: "systemd | Reload daemon"
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: "systemd | Enable redis readiness gate"
+      ansible.builtin.systemd:
+        name: "{{ redis_ready_service }}"
+        enabled: true
+
+    - name: "Health gate | Run redis readiness gate now"
+      ansible.builtin.systemd:
+        name: "{{ redis_ready_service }}"
+        state: started
+
+    - name: "Verify | Assert redis-cli ping works (in-container)"
+      ansible.builtin.command: "{{ podman_bin }} exec {{ redis_container }} redis-cli ping"
+      register: ping_out
+      changed_when: false
+
+    - name: "Verify | Assert readiness gate Result=success"
+      ansible.builtin.command: "systemctl show -p Result --value {{ redis_ready_service }}"
+      register: ready_result
+      changed_when: false
+
+    - name: "Verify | Fail if readiness gate did not report Result=success"
+      ansible.builtin.fail:
+        msg: "Redis readiness gate did not report Result=success (got '{{ ready_result.stdout | trim }}')."
+      when: (ready_result.stdout | trim) != "success"
+
+    - name: "Verify | Print summary"
+      ansible.builtin.debug:
+        msg:
+          - "Redis service: {{ redis_service }} (enabled={{ redis_enable_on_boot }}, started={{ redis_start_now }})"
+          - "Redis container: {{ redis_container }} (ping={{ ping_out.stdout | trim }})"
+          - "Health gate: {{ redis_ready_service }} (Result={{ ready_result.stdout | trim }})"
+          - "Next: update future dependent services to include 'After={{ redis_ready_service }}' and 'Requires={{ redis_ready_service }}'."
