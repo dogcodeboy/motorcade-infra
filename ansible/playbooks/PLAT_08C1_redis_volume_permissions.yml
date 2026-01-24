@@ -84,12 +84,13 @@
         name: "{{ redis_service }}"
         state: restarted
       when: perm_fix.changed
-
-    - name: "Verify | Ensure redis service is active"
+    - name: "Verify | Wait until redis service is active"
       ansible.builtin.command: "systemctl is-active {{ redis_service }}"
       register: redis_active
+      retries: 10
+      delay: 3
+      until: redis_active.stdout.strip() == "active"
       changed_when: false
-      failed_when: redis_active.stdout.strip() != "active"
 
     - name: "Verify | Ensure redis container is running (podman ps)"
       ansible.builtin.command: >-
