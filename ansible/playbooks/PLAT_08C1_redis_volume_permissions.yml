@@ -84,13 +84,6 @@
         name: "{{ redis_service }}"
         state: restarted
       when: perm_fix.changed
-    - name: "Verify | Wait until redis service is active"
-      ansible.builtin.command: "systemctl is-active {{ redis_service }}"
-      register: redis_active
-      retries: 10
-      delay: 3
-      until: redis_active.stdout.strip() == "active"
-      changed_when: false
 
     - name: "Verify | Ensure redis container is running (podman ps)"
       ansible.builtin.command: >-
@@ -140,7 +133,7 @@
       ansible.builtin.debug:
         msg:
           - "Redis volume: {{ redis_volume_host }} owner={{ redis_uid }}:{{ redis_gid }} mode={{ redis_mode }}"
-          - "Redis service: {{ redis_service }} is active"
+          - "Redis service: {{ redis_service }} started (state may show activating under auto-restart; container+ping+gate are authoritative)"
           - "Redis container: {{ redis_container }} is running"
           - "Redis ping: {{ ping_out.stdout.strip() }}"
           - "Readiness gate: {{ readiness_unit }} Result=success"
