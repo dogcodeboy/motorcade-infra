@@ -1,104 +1,111 @@
 ---
 # PLAT_08C.1 — Redis volume permissions invariant
-# Purpose:
-# - Fix Redis container start failures caused by non-writable /data volume (exit status 126)
-# - Enforce /srv/motorcade/volumes/redis ownership/permissions for Redis image user (uid/gid 999)
-# - Ensure readiness gate (motorcade-redis-ready.service) reports Result=success
-#
-# Notes:
-# - Podman is assumed to be manually installed at /usr/local/bin/podman (per platform policy)
-# - Verification is done via readiness gate (authoritative), not via systemd "is-active" or racy `podman ps`
+# Purpose: Fix Redis container crashloop due to volume perms (status=126) and unblock readiness gate.
+# Canonical verification: readiness gate Result=success (NOT systemctl is-active, NOT single-shot podman ps)
 
 - name: "PLAT_08C.1 | Redis volume permissions invariant (fix status=126; readiness gate unblocks)"
-  hosts: motorcade_web
+  hosts: motorcade_platform
   become: true
   gather_facts: true
 
   vars:
-    podman_bin: "/usr/local/bin/podman"
-    redis_volume_dir: "/srv/motorcade/volumes/redis"
-    redis_uid: "999"
-    redis_gid: "999"
+    podman_bin: /usr/local/bin/podman
+    redis_service: motorcade-redis.service
+    redis_ready_service: motorcade-redis-ready.service
+    redis_wait_script: /usr/local/sbin/motorcade-wait-redis.sh
+    redis_volume_dir: /srv/motorcade/volumes/redis
+    redis_uid: 999
+    redis_gid: 999
+    redis_mode: "0700"
 
   tasks:
-    - name: "Preflight | Ensure podman exists at locked path"
-      ansible.builtin.stat:
+    - name: Preflight | Ensure podman exists at locked path
+      stat:
         path: "{{ podman_bin }}"
       register: podman_stat
 
-    - name: "Preflight | Fail if podman missing"
-      ansible.builtin.fail:
-        msg: "Podman not found at {{ podman_bin }} (platform policy expects manual/static install)."
+    - name: Preflight | Fail if podman missing
+      fail:
+        msg: "Podman not found at {{ podman_bin }}. This repo assumes manual/static install. Install Podman first (per PLAT_01/PLAT_02 foundations)."
       when: not podman_stat.stat.exists
 
-    - name: "Preflight | Verify redis unit exists (PLAT_08B)"
-      ansible.builtin.stat:
-        path: "/etc/systemd/system/motorcade-redis.service"
+    - name: Preflight | Verify redis unit exists (PLAT_08B)
+      stat:
+        path: "/etc/systemd/system/{{ redis_service }}"
       register: redis_unit
 
-    - name: "Preflight | Fail if redis unit missing"
-      ansible.builtin.fail:
-        msg: "motorcade-redis.service not found; PLAT_08B must be applied first."
+    - name: Preflight | Fail if redis unit missing
+      fail:
+        msg: "Missing /etc/systemd/system/{{ redis_service }}. Run PLAT_08B first."
       when: not redis_unit.stat.exists
 
-    - name: "Preflight | Verify readiness gate unit exists (PLAT_08C)"
-      ansible.builtin.stat:
-        path: "/etc/systemd/system/motorcade-redis-ready.service"
-      register: redis_gate_unit
+    - name: Preflight | Verify readiness gate unit exists (PLAT_08C)
+      stat:
+        path: "/etc/systemd/system/{{ redis_ready_service }}"
+      register: gate_unit
 
-    - name: "Preflight | Fail if readiness gate unit missing"
-      ansible.builtin.fail:
-        msg: "motorcade-redis-ready.service not found; PLAT_08C must be applied first."
-      when: not redis_gate_unit.stat.exists
+    - name: Preflight | Fail if readiness gate unit missing
+      fail:
+        msg: "Missing /etc/systemd/system/{{ redis_ready_service }}. Run PLAT_08C first."
+      when: not gate_unit.stat.exists
 
-    - name: "Preflight | Verify readiness script exists (PLAT_08C)"
-      ansible.builtin.stat:
-        path: "/usr/local/sbin/motorcade-wait-redis.sh"
-      register: redis_wait_script
+    - name: Preflight | Verify readiness script exists (PLAT_08C)
+      stat:
+        path: "{{ redis_wait_script }}"
+      register: wait_script
 
-    - name: "Preflight | Fail if readiness script missing"
-      ansible.builtin.fail:
-        msg: "motorcade-wait-redis.sh not found; PLAT_08C must be applied first."
-      when: not redis_wait_script.stat.exists
+    - name: Preflight | Fail if readiness script missing
+      fail:
+        msg: "Missing {{ redis_wait_script }}. Run PLAT_08C first."
+      when: not wait_script.stat.exists
 
-    - name: "Filesystem | Ensure redis volume directory exists"
-      ansible.builtin.file:
+    - name: Filesystem | Ensure redis volume directory exists
+      file:
         path: "{{ redis_volume_dir }}"
         state: directory
-        mode: "0700"
-
-    - name: "Filesystem | Enforce redis volume owner/group and permissions (uid/gid 999)"
-      ansible.builtin.file:
-        path: "{{ redis_volume_dir }}"
         owner: "{{ redis_uid }}"
         group: "{{ redis_gid }}"
-        mode: "0700"
+        mode: "{{ redis_mode }}"
+
+    - name: Filesystem | Enforce redis volume owner/group and permissions (uid/gid {{ redis_uid }})
+      file:
+        path: "{{ redis_volume_dir }}"
+        state: directory
+        owner: "{{ redis_uid }}"
+        group: "{{ redis_gid }}"
+        mode: "{{ redis_mode }}"
         recurse: true
-      register: redis_vol_perm
+      register: perm_fix
 
-    - name: "systemd | Restart redis service if permissions changed"
-      ansible.builtin.systemd:
-        name: motorcade-redis.service
+    - name: systemd | Restart redis service if permissions changed
+      systemd:
+        name: "{{ redis_service }}"
         state: restarted
-        enabled: true
         daemon_reload: true
-      when: redis_vol_perm.changed
+      when: perm_fix.changed
 
-    # Always (re)run the readiness gate after enforcing invariants; it is authoritative for success.
-    - name: "Health gate | Reset failed state (if any)"
-      ansible.builtin.command: systemctl reset-failed motorcade-redis-ready.service
+    - name: systemd | Ensure redis service is started (idempotent)
+      systemd:
+        name: "{{ redis_service }}"
+        state: started
+        daemon_reload: false
+
+    # Canonical verification (doctrine): readiness gate result must be success
+    - name: systemd | Reset readiness gate failure state (idempotent)
+      command: "systemctl reset-failed {{ redis_ready_service }}"
       changed_when: false
       failed_when: false
 
-    - name: "Health gate | Run redis readiness gate now"
-      ansible.builtin.systemd:
-        name: motorcade-redis-ready.service
+    - name: systemd | Run readiness gate now (oneshot)
+      systemd:
+        name: "{{ redis_ready_service }}"
         state: started
-        enabled: true
-        daemon_reload: true
 
-    - name: "Verify | Redis readiness gate completed successfully"
-      ansible.builtin.command: systemctl show -p Result motorcade-redis-ready.service
+    - name: Verify | Redis readiness gate completed successfully
+      command: "systemctl show -p Result {{ redis_ready_service }}"
       register: redis_ready
       changed_when: false
-      failed_when: redis_ready.stdout != "Result=success"
+      retries: 10
+      delay: 2
+      until: redis_ready.stdout.strip() == "Result=success"
+      failed_when: redis_ready.stdout.strip() != "Result=success"

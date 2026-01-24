@@ -91,24 +91,11 @@ Proceed with **Podman / container services** and platform orchestration work (e.
   - systemd unit installed disabled + stopped by default
   - Network: motorcade-core
   - Persistent volume: /srv/motorcade/volumes/redis
-- PLAT_08C — Redis bring-up + readiness health gate (dependent-services safe)
-  - Enables + starts motorcade-redis.service
-  - Installs readiness script + oneshot unit: motorcade-redis-ready.service
-  - Verifies redis-cli ping from inside container
-
-- PLAT_08C.1 — Redis volume permissions invariant (status=126 fix)
-  - Enforces /srv/motorcade/volumes/redis ownership + permissions for container UID/GID 999
-  - Restarts motorcade-redis.service only if permissions changed
-  - Re-runs readiness gate and asserts Result=success
-
 
 ### Active / Next
 - PLAT_08C — Redis bring-up + health gate for dependent services
   - Explicit enable/start
   - Readiness and dependency verification
-
-- UPDATE (2026-01-24): PLAT_08C completed; permissions invariant handled by PLAT_08C.1
-- Next: PLAT_08D — first Redis-dependent service integration
 
 ### Notes
 - Nginx stack remains frozen and verified; do not reopen.
@@ -117,3 +104,21 @@ Proceed with **Podman / container services** and platform orchestration work (e.
 
 ### Operator Guidance
 - Refer to `docs/user-preferences.md` for authoritative session and build preferences.
+---
+
+## Operator References (Additions — append-only)
+
+### Inventory group naming (Ansible) — recurring pitfall
+
+We have repeatedly hit session failures due to host-pattern mismatches.
+
+**Canonical guidance:**
+- Use `motorcade_platform` as the host group for platform playbooks.
+- `motorcade_web` **does not exist** in `ansible/inventories/prod/hosts.ini`.
+- Do not invent group names; always confirm against `hosts.ini`.
+
+If you need to target a single node safely, use `--limit motorcade-web-01`.
+
+### Server locations & resources
+
+See: `docs/servers-and-resources.md` (authoritative reference for host aliases, IPs, regions, key paths, and operational notes).
