@@ -55,7 +55,27 @@ A step is "complete" only when:
 - Versions pinned in `releases/<env>.yaml`
 - Deployment log appended
 
+---
 
-## Purge Candidates Report
+# Canonical Deprecation Policy (Effective 2026-01-23-11)
 
-See: `docs/reports/PURGE_CANDIDATES.md`
+**Goal:** Keep the platform build stable and recoverable while allowing iterative experimentation.
+
+## Rules
+1) If a playbook fails or is superseded, **do not delete it during active platform build**.
+2) Move it to: `ansible/playbooks/deprecated/` (or the repo’s canonical deprecated folder) and add a clear banner:
+   - `⚠️ DEPRECATED — DO NOT RUN`
+   - Reason + date
+   - Replacement playbook (if any) or “none”
+3) Keep all deprecated items for historical context until the platform reaches a full “done” milestone.
+4) A **purge pass** (deletion) is allowed only after:
+   - Replacement is verified
+   - RUNBOOK + checkpoints no longer reference it
+   - A dedicated “PURGE” checkpoint is created
+
+## Nginx Freeze Reminder
+Nginx/SSL/HTTP2 is **frozen and verified**. Do not reopen or “fix” http2 warnings.
+- Canonical nginx playbook allowed (HTTP:80 only): `ansible/playbooks/PLAT_06A_nginx_http80_canonical_redirect.yml`
+
+## Next Subsystem (Non-nginx)
+Proceed with **Podman / container services** and platform orchestration work (e.g., PLAT_08A+).
