@@ -113,15 +113,26 @@
         name: "{{ redis_ready_service }}"
         enabled: true
 
-    - name: "Health gate | Run redis readiness gate now"
+    # IMPORTANT:
+    # This oneshot service uses RemainAfterExit=yes.
+    # If it is already active from a previous run, "start" will not re-run ExecStart.
+    # We deliberately stop + reset-failed + start to force a fresh readiness evaluation.
+
+    - name: "Health gate | Stop readiness gate (force fresh run)"
+      ansible.builtin.systemd:
+        name: "{{ redis_ready_service }}"
+        state: stopped
+      failed_when: false
+
+    - name: "Health gate | Reset readiness gate failure state (idempotent)"
+      ansible.builtin.command: "systemctl reset-failed {{ redis_ready_service }}"
+      changed_when: false
+      failed_when: false
+
+    - name: "Health gate | Run redis readiness gate now (oneshot)"
       ansible.builtin.systemd:
         name: "{{ redis_ready_service }}"
         state: started
-
-    - name: "Verify | Assert redis-cli ping works (in-container)"
-      ansible.builtin.command: "{{ podman_bin }} exec {{ redis_container }} redis-cli ping"
-      register: ping_out
-      changed_when: false
 
     - name: "Verify | Assert readiness gate Result=success"
       ansible.builtin.command: "systemctl show -p Result --value {{ redis_ready_service }}"
@@ -137,6 +148,5 @@
       ansible.builtin.debug:
         msg:
           - "Redis service: {{ redis_service }} (enabled={{ redis_enable_on_boot }}, started={{ redis_start_now }})"
-          - "Redis container: {{ redis_container }} (ping={{ ping_out.stdout | trim }})"
           - "Health gate: {{ redis_ready_service }} (Result={{ ready_result.stdout | trim }})"
-          - "Next: update future dependent services to include 'After={{ redis_ready_service }}' and 'Requires={{ redis_ready_service }}'."
+          - "Next: update dependent services to include 'After={{ redis_ready_service }}' and 'Requires={{ redis_ready_service }}'."

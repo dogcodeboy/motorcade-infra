@@ -115,6 +115,7 @@ We have repeatedly hit session failures due to host-pattern mismatches.
 **Canonical guidance:**
 - Use `motorcade_platform` as the host group for platform playbooks.
 - `motorcade_web` **does not exist** in `ansible/inventories/prod/hosts.ini`.
+- `motorcade-web` (hyphenated) **does not exist** either.
 - Do not invent group names; always confirm against `hosts.ini`.
 
 If you need to target a single node safely, use `--limit motorcade-web-01`.
