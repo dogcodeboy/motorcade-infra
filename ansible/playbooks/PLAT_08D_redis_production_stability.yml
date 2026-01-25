@@ -8,7 +8,7 @@
 # - It assumes PLAT_08C authored the canonical motorcade-redis.service.
 
 - name: "[PLAT_08D] | Redis production stability (healthcheck timer)"
-  hosts: motorcade_web
+  hosts: motorcade-web-01
   become: true
   vars:
     podman_bin: /usr/local/bin/podman
