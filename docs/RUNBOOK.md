@@ -124,3 +124,42 @@ Proceed with **Podman / container services** and platform orchestration work (e.
 
 ### Current status
 - **PLAT_08C is BLOCKED** until the playbook is replaced with a stable, one-shot Redis bring-up that is compatible with the static Podman install on AL2023.
+
+---
+
+## PLAT_08D — Redis Production Stability (Healthcheck Timer)
+
+**Purpose**: Adds a *bounded*, timer-based Redis health check that self-heals by restarting `motorcade-redis` if the container disappears or `redis-cli ping` fails. This avoids long-running “readiness daemons” and prevents silent drift.
+
+### Run
+
+```bash
+cd ~/Repos/motorcade-infra/ansible
+ansible-playbook -i inventories/prod/hosts.ini \
+  playbooks/PLAT_08D_redis_production_stability.yml \
+  --ask-vault-pass
+```
+
+### What it installs
+
+- `/usr/local/libexec/motorcade/redis_healthcheck.sh`
+- `motorcade-redis-healthcheck.service` (oneshot)
+- `motorcade-redis-healthcheck.timer` (runs every minute)
+
+### Verify
+
+On the server:
+
+```bash
+sudo systemctl is-active motorcade-redis
+sudo /usr/local/bin/podman ps --filter name=motorcade-redis
+sudo /usr/local/bin/podman exec motorcade-redis redis-cli ping
+
+sudo systemctl status motorcade-redis-healthcheck.timer --no-pager
+sudo journalctl -u motorcade-redis-healthcheck.service -n 50 --no-pager
+```
+
+**Pass criteria**:
+- `redis-cli ping` returns **PONG**
+- `motorcade-redis-healthcheck.timer` is **active (running)**
+- If Redis is stopped/killed, the timer run restarts it within ~60s

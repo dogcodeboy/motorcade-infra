@@ -1,74 +1,68 @@
 ---
-# PLAT_08C.1 — Redis volume permissions invariant
-# Purpose: Fix Redis container crashloop due to volume perms (status=126) and unblock readiness gate.
-# Canonical verification: readiness gate Result=success (NOT systemctl is-active, NOT single-shot podman ps)
+# PLAT_08C.1 — Redis volume permissions invariant (bounded)
+# Purpose: Fix Redis crashloop caused by bad volume perms/ownership, then verify Redis is reachable.
+# Notes:
+# - This playbook NO LONGER relies on any readiness-gate daemon services.
+# - Verification is bounded (fail-fast): redis-cli ping with retries.
+#
+# Run:
+#   cd ~/Repos/motorcade-infra/ansible
+#   ansible-playbook -i inventories/prod/hosts.ini \
+#     playbooks/PLAT_08C1_redis_volume_permissions.yml \
+#     --ask-vault-pass
 
-- name: "PLAT_08C.1 | Redis volume permissions invariant (fix status=126; readiness gate unblocks)"
-  hosts: motorcade_platform
+- name: "PLAT_08C.1 | Redis volume permissions invariant (bounded)"
+  hosts: motorcade-web-01
   become: true
   gather_facts: true
 
   vars:
     podman_bin: /usr/local/bin/podman
+    redis_container: motorcade-redis
     redis_service: motorcade-redis.service
-    redis_ready_service: motorcade-redis-ready.service
-    redis_wait_script: /usr/local/sbin/motorcade-wait-redis.sh
+
     redis_volume_dir: /srv/motorcade/volumes/redis
+
+    # Alpine redis image typically uses uid/gid 999
     redis_uid: 999
     redis_gid: 999
     redis_mode: "0700"
 
+    # bounded wait (total ~60s by default)
+    redis_wait_retries: 30
+    redis_wait_delay: 2
+
   tasks:
     - name: Preflight | Ensure podman exists at locked path
-      stat:
+      ansible.builtin.stat:
         path: "{{ podman_bin }}"
       register: podman_stat
 
     - name: Preflight | Fail if podman missing
-      fail:
-        msg: "Podman not found at {{ podman_bin }}. This repo assumes manual/static install. Install Podman first (per PLAT_01/PLAT_02 foundations)."
+      ansible.builtin.fail:
+        msg: "Podman not found at {{ podman_bin }}. Fix PLAT_01B first."
       when: not podman_stat.stat.exists
 
-    - name: Preflight | Verify redis unit exists (PLAT_08B)
-      stat:
+    - name: Preflight | Verify redis systemd unit exists (PLAT_08B)
+      ansible.builtin.stat:
         path: "/etc/systemd/system/{{ redis_service }}"
       register: redis_unit
 
     - name: Preflight | Fail if redis unit missing
-      fail:
+      ansible.builtin.fail:
         msg: "Missing /etc/systemd/system/{{ redis_service }}. Run PLAT_08B first."
       when: not redis_unit.stat.exists
 
-    - name: Preflight | Verify readiness gate unit exists (PLAT_08C)
-      stat:
-        path: "/etc/systemd/system/{{ redis_ready_service }}"
-      register: gate_unit
-
-    - name: Preflight | Fail if readiness gate unit missing
-      fail:
-        msg: "Missing /etc/systemd/system/{{ redis_ready_service }}. Run PLAT_08C first."
-      when: not gate_unit.stat.exists
-
-    - name: Preflight | Verify readiness script exists (PLAT_08C)
-      stat:
-        path: "{{ redis_wait_script }}"
-      register: wait_script
-
-    - name: Preflight | Fail if readiness script missing
-      fail:
-        msg: "Missing {{ redis_wait_script }}. Run PLAT_08C first."
-      when: not wait_script.stat.exists
-
     - name: Filesystem | Ensure redis volume directory exists
-      file:
+      ansible.builtin.file:
         path: "{{ redis_volume_dir }}"
         state: directory
         owner: "{{ redis_uid }}"
         group: "{{ redis_gid }}"
         mode: "{{ redis_mode }}"
 
-    - name: Filesystem | Enforce redis volume owner/group and permissions (uid/gid {{ redis_uid }})
-      file:
+    - name: Filesystem | Enforce redis volume ownership + permissions recursively
+      ansible.builtin.file:
         path: "{{ redis_volume_dir }}"
         state: directory
         owner: "{{ redis_uid }}"
@@ -78,34 +72,34 @@
       register: perm_fix
 
     - name: systemd | Restart redis service if permissions changed
-      systemd:
+      ansible.builtin.systemd:
         name: "{{ redis_service }}"
         state: restarted
         daemon_reload: true
       when: perm_fix.changed
 
-    - name: systemd | Ensure redis service is started (idempotent)
-      systemd:
+    - name: systemd | Ensure redis service is running
+      ansible.builtin.systemd:
         name: "{{ redis_service }}"
         state: started
-        daemon_reload: false
+        enabled: true
 
-    # Canonical verification (doctrine): readiness gate result must be success
-    - name: systemd | Reset readiness gate failure state (idempotent)
-      command: "systemctl reset-failed {{ redis_ready_service }}"
+    - name: Health | Wait for redis to answer PING (bounded)
+      ansible.builtin.command: "{{ podman_bin }} exec {{ redis_container }} redis-cli ping"
+      register: redis_ping
       changed_when: false
-      failed_when: false
+      retries: "{{ redis_wait_retries }}"
+      delay: "{{ redis_wait_delay }}"
+      until: redis_ping.rc == 0
 
-    - name: systemd | Run readiness gate now (oneshot)
-      systemd:
-        name: "{{ redis_ready_service }}"
-        state: started
-
-    - name: Verify | Redis readiness gate completed successfully
-      command: "systemctl show -p Result {{ redis_ready_service }}"
-      register: redis_ready
+    - name: Verify | Show redis container status
+      ansible.builtin.command: "{{ podman_bin }} ps --filter name={{ redis_container }} --format '{{'{{'}}.Names{{'}}'}}\t{{'{{'}}.Status{{'}}'}}\t{{'{{'}}.Image{{'}}'}}'"
+      register: redis_ps
       changed_when: false
-      retries: 10
-      delay: 2
-      until: redis_ready.stdout.strip() == "Result=success"
-      failed_when: redis_ready.stdout.strip() != "Result=success"
+
+    - name: Verify | Assert container is running
+      ansible.builtin.assert:
+        that:
+          - "'Up' in redis_ps.stdout"
+        fail_msg: "Redis container is not Up. Output: {{ redis_ps.stdout }}"
+        success_msg: "Redis container is Up and responding."

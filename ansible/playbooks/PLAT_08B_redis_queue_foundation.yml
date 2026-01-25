@@ -85,7 +85,6 @@
           ExecStartPre=-{{ podman_bin }} rm -f {{ redis_container }}
           ExecStart={{ podman_bin }} run --name {{ redis_container }} \
             --network {{ redis_network }} \
-            --log-driver journald \
             -v {{ redis_volume_host }}:{{ redis_data_container }}:Z \
             {{ redis_image }} \
             redis-server --appendonly {{ redis_appendonly }} --save "{{ redis_save_rules }}"

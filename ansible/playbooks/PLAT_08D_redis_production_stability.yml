@@ -1,0 +1,152 @@
+---
+# PLAT_08D — Redis production stability guardrails
+# Adds a bounded, timer-based health check (no infinite readiness daemons)
+# and ensures Redis is restarted if it stops responding.
+#
+# NOTE:
+# - This does NOT change networking or expose Redis publicly.
+# - It assumes PLAT_08C authored the canonical motorcade-redis.service.
+
+- name: "[PLAT_08D] | Redis production stability (healthcheck timer)"
+  hosts: motorcade_web
+  become: true
+  vars:
+    podman_bin: /usr/local/bin/podman
+    redis_container_name: motorcade-redis
+    health_script_path: /usr/local/libexec/motorcade/redis_healthcheck.sh
+
+    health_service_unit: /etc/systemd/system/motorcade-redis-healthcheck.service
+    health_timer_unit: /etc/systemd/system/motorcade-redis-healthcheck.timer
+
+    # Timer cadence: every 1 minute, with a small randomized delay to avoid thundering herd if more hosts later.
+    health_on_calendar: "*:0/1"
+    health_randomized_delay_sec: 10
+
+  tasks:
+    - name: "[Preflight] | Ensure podman exists at locked path"
+      ansible.builtin.stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+
+    - name: "[Preflight] | Fail if podman missing"
+      ansible.builtin.fail:
+        msg: "Podman not found at {{ podman_bin }}. This platform uses a static/manual Podman install at /usr/local/bin. Fix Podman first (PLAT_01B)."
+      when: not podman_stat.stat.exists
+
+    - name: "[Preflight] | Verify redis systemd unit exists"
+      ansible.builtin.stat:
+        path: /etc/systemd/system/motorcade-redis.service
+      register: redis_unit_stat
+
+    - name: "[Preflight] | Fail if redis unit missing"
+      ansible.builtin.fail:
+        msg: "motorcade-redis.service is missing. Run PLAT_08C first (authoritative Redis bring-up)."
+      when: not redis_unit_stat.stat.exists
+
+    - name: "[Health] | Ensure healthcheck directory exists"
+      ansible.builtin.file:
+        path: /usr/local/libexec/motorcade
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "[Health] | Install redis healthcheck script (bounded + self-healing)"
+      ansible.builtin.copy:
+        dest: "{{ health_script_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          PODMAN="{{ podman_bin }}"
+          NAME="{{ redis_container_name }}"
+
+          # If container is not present, restart the service (it will recreate container)
+          if ! "$PODMAN" ps --format '{{"{{"}}.Names{{"}}"}}' | grep -qx "$NAME"; then
+            echo "[redis-healthcheck] container '$NAME' not running; restarting systemd unit" >&2
+            systemctl restart motorcade-redis
+            exit 1
+          fi
+
+          # Ping must return PONG
+          if ! "$PODMAN" exec "$NAME" redis-cli ping | grep -qx "PONG"; then
+            echo "[redis-healthcheck] ping failed; dumping last logs and restarting" >&2
+            "$PODMAN" logs --tail 120 "$NAME" || true
+            systemctl restart motorcade-redis
+            exit 1
+          fi
+
+          exit 0
+
+    - name: "[Systemd] | Write motorcade-redis-healthcheck.service (oneshot)"
+      ansible.builtin.copy:
+        dest: "{{ health_service_unit }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade Redis healthcheck (oneshot)
+          Wants=motorcade-redis.service
+          After=motorcade-redis.service
+
+          [Service]
+          Type=oneshot
+          ExecStart={{ health_script_path }}
+
+    - name: "[Systemd] | Write motorcade-redis-healthcheck.timer"
+      ansible.builtin.copy:
+        dest: "{{ health_timer_unit }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade Redis healthcheck timer
+
+          [Timer]
+          OnCalendar={{ health_on_calendar }}
+          RandomizedDelaySec={{ health_randomized_delay_sec }}
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+
+    - name: "[Systemd] | Reload daemon"
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: "[Systemd] | Enable + start healthcheck timer"
+      ansible.builtin.systemd:
+        name: motorcade-redis-healthcheck.timer
+        enabled: true
+        state: started
+
+    - name: "[Verify] | Ensure redis service is active"
+      ansible.builtin.systemd:
+        name: motorcade-redis
+        state: started
+        enabled: true
+
+    - name: "[Verify] | Bounded ping verification"
+      ansible.builtin.command: "{{ podman_bin }} exec {{ redis_container_name }} redis-cli ping"
+      register: ping_out
+      changed_when: false
+      retries: 15
+      delay: 2
+      until: ping_out.stdout is search('PONG')
+
+    - name: "[Verify] | Show timer status (for run output)"
+      ansible.builtin.command: "systemctl status motorcade-redis-healthcheck.timer --no-pager"
+      register: timer_status
+      changed_when: false
+
+    - name: "[Verify] | Assert complete"
+      ansible.builtin.debug:
+        msg:
+          - "Redis is responding (PONG)."
+          - "Healthcheck timer enabled: motorcade-redis-healthcheck.timer"
+          - "Tip: To view timer runs: journalctl -u motorcade-redis-healthcheck.service -n 50 --no-pager"

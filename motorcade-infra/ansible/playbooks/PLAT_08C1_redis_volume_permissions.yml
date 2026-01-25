@@ -1,0 +1,102 @@
+---
+# PLAT_08C1 — Redis volume permissions + SELinux label invariant (bounded)
+# Purpose: Fix Redis churn/crashloop (status=126 / immediate exit) caused by
+#          unwritable /data volume and/or SELinux label mismatch.
+# Doctrine: no readiness daemons; verification is bounded and fail-fast.
+
+- name: PLAT_08C1 | Redis volume invariant (perms + SELinux + bounded ping)
+  hosts: motorcade-web-01
+  become: true
+  gather_facts: true
+
+  vars:
+    podman_bin: /usr/local/bin/podman
+
+    redis_service: motorcade-redis.service
+    redis_container: motorcade-redis
+
+    redis_volume_dir: /srv/motorcade/volumes/redis
+    redis_uid: "999"
+    redis_gid: "999"
+
+    redis_wait_retries: 20
+    redis_wait_delay: 2
+
+  tasks:
+    - name: Preflight | Ensure podman exists at locked path
+      ansible.builtin.stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+
+    - name: Preflight | Fail if podman missing
+      ansible.builtin.fail:
+        msg: "Podman not found at {{ podman_bin }}. Install via static bundle method (PLAT_01B)."
+      when: not podman_stat.stat.exists
+
+    - name: Preflight | Verify redis unit exists
+      ansible.builtin.stat:
+        path: "/etc/systemd/system/{{ redis_service }}"
+      register: redis_unit
+
+    - name: Preflight | Fail if redis unit missing
+      ansible.builtin.fail:
+        msg: "Missing /etc/systemd/system/{{ redis_service }}. Run PLAT_08B first."
+      when: not redis_unit.stat.exists
+
+    - name: Filesystem | Ensure redis volume directory exists
+      ansible.builtin.file:
+        path: "{{ redis_volume_dir }}"
+        state: directory
+        owner: "{{ redis_uid }}"
+        group: "{{ redis_gid }}"
+        mode: "0750"
+
+    - name: Filesystem | Enforce owner/group recursively
+      ansible.builtin.file:
+        path: "{{ redis_volume_dir }}"
+        state: directory
+        owner: "{{ redis_uid }}"
+        group: "{{ redis_gid }}"
+        recurse: true
+
+    - name: SELinux | Check current label on redis volume
+      ansible.builtin.command: "ls -Zd {{ redis_volume_dir }}"
+      register: redis_ls_z
+      changed_when: false
+      failed_when: false
+
+    - name: SELinux | Apply container_file_t label (best-effort)
+      ansible.builtin.command: "chcon -Rt container_file_t {{ redis_volume_dir }}"
+      when: redis_ls_z.rc == 0 and ('container_file_t' not in redis_ls_z.stdout)
+      changed_when: true
+      failed_when: false
+
+    - name: systemd | Restart redis service
+      ansible.builtin.systemd:
+        name: "{{ redis_service }}"
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
+    - name: Health | Assert container is running (bounded)
+      ansible.builtin.command: "{{ podman_bin }} ps --filter name={{ redis_container }} --format '{{'{{'}}.Status{{'}}'}}'"
+      register: redis_status
+      changed_when: false
+      retries: "{{ redis_wait_retries }}"
+      delay: "{{ redis_wait_delay }}"
+      until: redis_status.rc == 0 and ('Up' in redis_status.stdout)
+
+    - name: Health | PING (bounded)
+      ansible.builtin.command: "{{ podman_bin }} exec {{ redis_container }} redis-cli ping"
+      register: redis_ping
+      changed_when: false
+      retries: "{{ redis_wait_retries }}"
+      delay: "{{ redis_wait_delay }}"
+      until: redis_ping.rc == 0 and (redis_ping.stdout | trim) == 'PONG'
+
+    - name: Verify | Summary
+      ansible.builtin.debug:
+        msg:
+          - "SELinux: {{ redis_ls_z.stdout | default('n/a') }}"
+          - "Status: {{ redis_status.stdout | default('') }}"
+          - "PING: {{ redis_ping.stdout | default('') }}"

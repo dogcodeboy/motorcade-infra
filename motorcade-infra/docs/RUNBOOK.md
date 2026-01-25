@@ -105,10 +105,38 @@ Proceed with **Podman / container services** and platform orchestration work (e.
 ### Operator Guidance
 - Refer to `docs/user-preferences.md` for authoritative session and build preferences.
 
+
+---
+## APPEND — 2026-01-25 — PLAT_08C Redis Bring-Up Blocked (Stability)
+
+### What happened
+- `motorcade-redis.service` entered an auto-restart loop.
+- `motorcade-redis-ready.service` (readiness gate) hung because Redis never became reachable.
+- Root cause observed in journald: Podman/conmon build does **not** support journald logging (`--log-driver journald`) on this host, causing the container start to fail.
+
+### Key rule going forward
+- **Do not use** `--log-driver journald` for Podman-managed containers on this stack.
+- **Do not use** infinite/daemon-style readiness gates. Any health gating must be bounded and fail fast with actionable logs.
+
+### Host naming note (recurring issue)
+- Inventory host is **`motorcade-web-01`**.
+- **`motorcade_web` does not exist** (avoid using it in playbooks/commands).
+
+### Current status
+- **PLAT_08C is BLOCKED** until the playbook is replaced with a stable, one-shot Redis bring-up that is compatible with the static Podman install on AL2023.
+
 ---
 
-## Inventory and server map (anti-confusion note)
+## PLAT_08C (Fix6) — Redis Bring-up Churn Stopper (Unit Rewrite + Volume Perms + SELinux)
 
-- Inventory file (authoritative): `ansible/inventories/prod/hosts.ini`
-- **Important:** the group `motorcade_web` does **not** exist in the inventory. Use `motorcade_platform` for the primary EC2 host unless the inventory changes.
-- Server map: `docs/platform/servers_and_resources.md`
+If `motorcade-redis.service` is in an auto-restart loop and `podman exec motorcade-redis redis-cli ping` fails because the container is missing, apply Fix6.
+
+**Run:**
+```bash
+cd ~/Repos/motorcade-infra/ansible
+ansible-playbook -i inventories/prod/hosts.ini playbooks/PLAT_08C_redis_bringup_health_gate.yml --ask-vault-pass
+```
+
+**Expected:**
+- `podman ps --filter name=motorcade-redis` shows **Up**
+- `redis-cli ping` returns **PONG**

@@ -1,167 +1,167 @@
 ---
-# PLAT_08C — Redis bring-up + bounded health gate (1-and-done)
+# PLAT_08C — Redis bring-up (authoritative)
+# Fix6: stop churn by (1) removing journald logging entirely via full unit rewrite,
+#       (2) preflighting volume ownership + SELinux labels,
+#       (3) bounded readiness that asserts container is Up before ping.
 #
-# Assumptions:
-# - Rootful Podman installed (manual/static) at /usr/local/bin/podman
-# - Podman network "motorcade-core" exists (PLAT_02A)
-# - Base volumes root exists at /srv/motorcade/volumes (PLAT_02A)
-#
-# Notes:
-# - Do not set --log-driver=journald. Some Podman/conmon builds lack journald support.
-# - Verification and readiness are bounded; no infinite waits.
+# Run:
+#   cd ~/Repos/motorcade-infra/ansible
+#   ansible-playbook -i inventories/prod/hosts.ini playbooks/PLAT_08C_redis_bringup_health_gate.yml --ask-vault-pass
 
-- name: PLAT_08C — Redis bring-up + bounded health gate
-  hosts: motorcade_platform
+- name: PLAT_08C | Redis bring-up + bounded readiness (unit rewrite + perms/SELinux)
+  hosts: motorcade-web-01
   become: true
   gather_facts: true
 
   vars:
     podman_bin: /usr/local/bin/podman
-    redis_container_name: motorcade-redis
+
+    platform_target: motorcade-platform.target
+
+    redis_container: motorcade-redis
+    redis_service: motorcade-redis.service
+    old_ready_service: motorcade-redis-ready.service
+
     redis_image: docker.io/library/redis:7.2-alpine
-    redis_volume_dir: /srv/motorcade/volumes/redis
     redis_network: motorcade-core
-    redis_ready_timeout_seconds: 300
-    redis_ready_sleep_seconds: 2
+
+    motorcade_root: /srv/motorcade
+    redis_volume_host: "{{ motorcade_root }}/volumes/redis"
+    redis_data_container: /data
+
+    redis_user_uid: 999
+    redis_user_gid: 999
+
+    redis_appendonly: "yes"
+    redis_save_rules: "60 1000"
+
+    # bounded wait (~60s)
+    wait_retries: 30
+    wait_delay: 2
+
+    redis_unit_file: /etc/systemd/system/motorcade-redis.service
 
   tasks:
-    - name: Preflight | podman must exist at /usr/local/bin/podman
+    - name: Preflight | Ensure podman exists at locked path
       ansible.builtin.stat:
         path: "{{ podman_bin }}"
       register: podman_stat
 
-    - name: Preflight | fail if podman missing
+    - name: Preflight | Fail if podman missing
       ansible.builtin.fail:
-        msg: "Podman not found at {{ podman_bin }}. Install via PLAT_01B (manual/static) first."
+        msg: "Podman not found at {{ podman_bin }}. Fix PLAT_01B first."
       when: not podman_stat.stat.exists
 
-    - name: Ensure Redis volume directory exists
+    - name: Preflight | Mask old readiness gate unit (prevents hang loops)
+      ansible.builtin.systemd:
+        name: "{{ old_ready_service }}"
+        state: stopped
+        enabled: false
+        masked: true
+      failed_when: false
+
+    - name: Filesystem | Ensure redis volume directory exists (UID/GID 999)
       ansible.builtin.file:
-        path: "{{ redis_volume_dir }}"
+        path: "{{ redis_volume_host }}"
         state: directory
-        owner: root
-        group: root
-        mode: "0750"
+        owner: "{{ redis_user_uid }}"
+        group: "{{ redis_user_gid }}"
+        mode: "0755"
 
-    - name: Pull Redis image (idempotent)
-      ansible.builtin.command: "{{ podman_bin }} pull {{ redis_image }}"
-      register: pull_out
-      changed_when: "'Downloaded newer image' in (pull_out.stdout + pull_out.stderr)"
-      failed_when: pull_out.rc != 0
+    - name: SELinux | Detect enforcing mode (best-effort)
+      ansible.builtin.command: getenforce
+      register: selinux_mode
+      changed_when: false
+      failed_when: false
 
-    - name: Install Redis systemd unit (rootful podman, internal-only)
+    - name: SELinux | Check for semanage availability
+      ansible.builtin.command: bash -lc 'command -v semanage >/dev/null 2>&1'
+      register: semanage_present
+      changed_when: false
+      failed_when: false
+      when:
+        - selinux_mode.stdout is defined
+        - selinux_mode.stdout | trim == 'Enforcing'
+
+    - name: SELinux | Set fcontext + restorecon for redis volume (preferred)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        semanage fcontext -a -t container_file_t '{{ redis_volume_host }}(/.*)?' || true
+        restorecon -Rv '{{ redis_volume_host }}'
+      args:
+        executable: /bin/bash
+      when:
+        - selinux_mode.stdout is defined
+        - selinux_mode.stdout | trim == 'Enforcing'
+        - semanage_present.rc == 0
+
+    - name: SELinux | Apply chcon label for redis volume (fallback)
+      ansible.builtin.command: "chcon -Rt container_file_t {{ redis_volume_host }}"
+      when:
+        - selinux_mode.stdout is defined
+        - selinux_mode.stdout | trim == 'Enforcing'
+        - semanage_present.rc != 0
+      failed_when: false
+
+    - name: Systemd | Write redis unit from scratch (NO journald)
       ansible.builtin.copy:
-        dest: /etc/systemd/system/motorcade-redis.service
+        dest: "{{ redis_unit_file }}"
         owner: root
         group: root
         mode: "0644"
         content: |
           [Unit]
-          Description=Motorcade Redis (internal queue/cache) - foundation
-          Wants=network-online.target
+          Description=Motorcade Redis (internal queue/cache) - authoritative
           After=network-online.target
-          Requires=motorcade-podman.service
-          After=motorcade-podman.service
+          Wants=network-online.target
+          Requires={{ platform_target }}
 
           [Service]
           Type=simple
-          Environment=PODMAN={{ podman_bin }}
-          ExecStartPre=/usr/local/bin/podman rm -f {{ redis_container_name }}
-          ExecStart={{ podman_bin }} run --name {{ redis_container_name }} --network {{ redis_network }} \
-            -v {{ redis_volume_dir }}:/data:Z \
-            {{ redis_image }} redis-server --appendonly yes --save 60 1000
-          ExecStop={{ podman_bin }} stop -t 10 {{ redis_container_name }}
-          ExecStopPost={{ podman_bin }} rm -f {{ redis_container_name }}
-          Restart=always
+          ExecStartPre=-{{ podman_bin }} rm -f {{ redis_container }}
+          ExecStart={{ podman_bin }} run --name {{ redis_container }} \
+            --network {{ redis_network }} \
+            --user {{ redis_user_uid }}:{{ redis_user_gid }} \
+            -v {{ redis_volume_host }}:{{ redis_data_container }}:Z \
+            {{ redis_image }} \
+            redis-server --appendonly {{ redis_appendonly }} --save "{{ redis_save_rules }}"
+          ExecStop={{ podman_bin }} stop -t 10 {{ redis_container }}
+          ExecStopPost=-{{ podman_bin }} rm -f {{ redis_container }}
+          Restart=on-failure
           RestartSec=3
-          TimeoutStartSec=300
-          TimeoutStopSec=30
-          StartLimitIntervalSec=0
 
           [Install]
-          WantedBy=multi-user.target
+          WantedBy={{ platform_target }}
 
-    - name: Install bounded Redis wait script
-      ansible.builtin.copy:
-        dest: /usr/local/sbin/motorcade-wait-redis.sh
-        owner: root
-        group: root
-        mode: "0755"
-        content: |
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          PODMAN="{{ podman_bin }}"
-          CONTAINER="{{ redis_container_name }}"
-          TIMEOUT="{{ redis_ready_timeout_seconds }}"
-          SLEEP="{{ redis_ready_sleep_seconds }}"
-
-          end=$(( $(date +%s) + TIMEOUT ))
-
-          while true; do
-            if "$PODMAN" ps --format '{{.Names}}' | grep -qx "$CONTAINER"; then
-              if "$PODMAN" exec "$CONTAINER" redis-cli ping >/dev/null 2>&1; then
-                exit 0
-              fi
-            fi
-
-            if [ "$(date +%s)" -ge "$end" ]; then
-              echo "Timed out waiting for redis readiness (container=$CONTAINER, timeout=${TIMEOUT}s)" >&2
-              "$PODMAN" ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' >&2 || true
-              exit 1
-            fi
-
-            sleep "$SLEEP"
-          done
-
-    - name: Install Redis readiness gate unit (bounded, no restart loop)
-      ansible.builtin.copy:
-        dest: /etc/systemd/system/motorcade-redis-ready.service
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          [Unit]
-          Description=Motorcade Redis readiness gate (blocks dependent services until Redis responds)
-          Wants=motorcade-redis.service
-          After=motorcade-redis.service
-
-          [Service]
-          Type=oneshot
-          ExecStart=/usr/local/sbin/motorcade-wait-redis.sh
-          TimeoutStartSec={{ redis_ready_timeout_seconds + 30 }}
-          RemainAfterExit=yes
-
-          [Install]
-          WantedBy=multi-user.target
-
-    - name: systemd daemon-reload
+    - name: Systemd | Reload daemon
       ansible.builtin.systemd:
         daemon_reload: true
 
-    - name: Enable + restart Redis service
+    - name: Systemd | Restart redis service (authoritative bring-up)
       ansible.builtin.systemd:
-        name: motorcade-redis.service
-        enabled: true
+        name: "{{ redis_service }}"
         state: restarted
-
-    - name: Start Redis readiness gate (bounded)
-      ansible.builtin.systemd:
-        name: motorcade-redis-ready.service
         enabled: true
-        state: restarted
 
-    - name: Verify Redis responds to ping (bounded retry)
-      ansible.builtin.command: "{{ podman_bin }} exec {{ redis_container_name }} redis-cli ping"
-      register: ping_out
-      retries: 60
-      delay: 2
-      until: ping_out.rc == 0 and (ping_out.stdout | trim) == 'PONG'
+    - name: Health | Wait for container to be Up (bounded)
+      ansible.builtin.command: "{{ podman_bin }} ps --filter name={{ redis_container }} --format {{'"'}}{{'{{'}}.Status{{'}}'}}{{'"'}}"
+      register: redis_ps
       changed_when: false
+      retries: "{{ wait_retries }}"
+      delay: "{{ wait_delay }}"
+      until: redis_ps.rc == 0 and ('Up' in redis_ps.stdout)
 
-    - name: Summary
+    - name: Health | Wait for redis to answer PING (bounded)
+      ansible.builtin.command: "{{ podman_bin }} exec {{ redis_container }} redis-cli ping"
+      register: redis_ping
+      changed_when: false
+      retries: "{{ wait_retries }}"
+      delay: "{{ wait_delay }}"
+      until: redis_ping.rc == 0 and (redis_ping.stdout | trim) == 'PONG'
+
+    - name: Verify | Success summary
       ansible.builtin.debug:
         msg:
-          - "Redis is up: {{ redis_container_name }} ({{ redis_image }})"
-          - "Readiness gate: motorcade-redis-ready.service is active"
-          - "Verification: redis-cli ping => {{ ping_out.stdout | trim }}"
+          - "Redis is Up and responding: {{ redis_ping.stdout | trim }}"
+          - "Volume: {{ redis_volume_host }} owned by {{ redis_user_uid }}:{{ redis_user_gid }}"
+          - "SELinux: {{ (selinux_mode.stdout | trim) if (selinux_mode.stdout is defined) else 'unknown' }}"
