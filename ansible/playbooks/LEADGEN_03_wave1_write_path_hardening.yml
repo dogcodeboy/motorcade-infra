@@ -18,127 +18,113 @@
 - name: "LEADGEN_03 — LeadGen Wave 1 write-path hardening"
   hosts: motorcade
   become: true
+  gather_facts: true
+
+  # IMPORTANT: this is the correct repo layout (NO ansible/group_vars nesting)
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/motorcade/vault.yml"
+    - "{{ playbook_dir }}/../group_vars/motorcade/main.yml"
+
   vars:
-    podman_bin: "/usr/local/bin/podman"
-    leadgen_repo_dir: "/opt/motorcade-leadgen"
-    leadgen_image: "localhost/motorcade-leadgen-api:wave1"
-    leadgen_container_name: "motorcade-leadgen-api"
-    leadgen_env_path: "/etc/motorcade/leadgen.env"
-    service_unit_path: "/etc/systemd/system/motorcade-leadgen-api.service"
-    host_bind: "127.0.0.1:8000"
-    container_port: "8080"
-    health_url: "http://127.0.0.1:8000/lead/health"
-    migration_sql_src: "files/leadgen/20260126_02_wave1_write_path.sql"
-    migration_sql_dst: "/tmp/20260126_02_wave1_write_path.sql"
+    # You can override these in group_vars/motorcade/main.yml if you want.
+    motorcade_base_dir: "/opt/motorcade"
+    leadgen_app_dir: "{{ motorcade_base_dir }}/leadgen"
+    leadgen_data_dir: "{{ leadgen_app_dir }}/data"
+    leadgen_logs_dir: "{{ leadgen_app_dir }}/logs"
+    leadgen_tmp_dir: "{{ leadgen_app_dir }}/tmp"
+    leadgen_config_dir: "{{ leadgen_app_dir }}/config"
 
-  tasks:
+    # Ownership: keep root-owned by default; containers can be granted access via group if needed later.
+    motorcade_owner: "root"
+    motorcade_group: "root"
+
+    # Permissions (tight defaults)
+    dir_mode_strict: "0750"
+    dir_mode_tmp: "1770"   # sticky bit for tmp, group-writable
+
+    # Podman network expected by the platform
+    motorcade_core_network: "motorcade-core"
+
+  pre_tasks:
+    - name: "Preflight | ensure running on a supported OS family"
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.os_family in ["RedHat", "Amazon"]
+        fail_msg: "Unsupported OS family: {{ ansible_facts.os_family }}"
+
     - name: "Preflight | podman present"
-      ansible.builtin.stat:
-        path: "{{ podman_bin }}"
-      register: podman_stat
-      failed_when: not podman_stat.stat.exists
-
-    - name: "Preflight | motorcade-core network exists"
-      ansible.builtin.command: "{{ podman_bin }} network exists motorcade-core"
+      ansible.builtin.command: podman --version
+      register: podman_version
       changed_when: false
 
-    - name: "Preflight | require vault keys"
+    - name: "Preflight | motorcade-core network exists"
+      ansible.builtin.command: "podman network exists {{ motorcade_core_network }}"
+      register: net_exists
+      changed_when: false
+      failed_when: net_exists.rc != 0
+
+    - name: "Preflight | require vault keys (defined + non-empty)"
       ansible.builtin.assert:
         that:
           - vault_leadgen_intake_api_key is defined
+          - (vault_leadgen_intake_api_key | string | trim) | length > 0
           - vault_leadgen_admin_api_key is defined
+          - (vault_leadgen_admin_api_key | string | trim) | length > 0
           - vault_postgres_password is defined
+          - (vault_postgres_password | string | trim) | length > 0
         fail_msg: >-
-          Missing required vault values. Ensure these are present in ansible/group_vars/motorcade/vault.yml (encrypted):
-          - vault_leadgen_intake_api_key
-          - vault_leadgen_admin_api_key
-          - vault_postgres_password
+          Missing required vault values. Expected these in:
+          {{ playbook_dir }}/../group_vars/motorcade/vault.yml :
+          vault_leadgen_intake_api_key, vault_leadgen_admin_api_key, vault_postgres_password
 
-    - name: "Config | ensure /etc/motorcade exists"
+  tasks:
+    - name: "Create base directory structure (strict perms)"
       ansible.builtin.file:
-        path: "/etc/motorcade"
+        path: "{{ item.path }}"
         state: directory
-        owner: root
-        group: root
-        mode: "0750"
+        owner: "{{ motorcade_owner }}"
+        group: "{{ motorcade_group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ motorcade_base_dir }}",  mode: "{{ dir_mode_strict }}" }
+        - { path: "{{ leadgen_app_dir }}",     mode: "{{ dir_mode_strict }}" }
+        - { path: "{{ leadgen_config_dir }}",  mode: "{{ dir_mode_strict }}" }
+        - { path: "{{ leadgen_data_dir }}",    mode: "{{ dir_mode_strict }}" }
+        - { path: "{{ leadgen_logs_dir }}",    mode: "{{ dir_mode_strict }}" }
+        - { path: "{{ leadgen_tmp_dir }}",     mode: "{{ dir_mode_tmp }}" }
 
-    - name: "DB | stage Wave 1 write-path migration"
-      ansible.builtin.copy:
-        src: "{{ migration_sql_src }}"
-        dest: "{{ migration_sql_dst }}"
-        owner: root
-        group: root
-        mode: "0640"
-
-    - name: "DB | apply migration in motorcade-postgres"
-      ansible.builtin.command: >-
-        {{ podman_bin }} exec motorcade-postgres
-        psql -U postgres -v ON_ERROR_STOP=1 -f {{ migration_sql_dst }}
-      register: mig
+    - name: "Harden: remove world-write under motorcade base (except tmp sticky dir)"
+      ansible.builtin.command: >
+        bash -lc "find '{{ motorcade_base_dir }}' -xdev -type d ! -path '{{ leadgen_tmp_dir }}' -perm -0002 -print -exec chmod o-w {} +"
       changed_when: false
 
-    - name: "Report | migration stdout"
-      ansible.builtin.debug:
-        var: mig.stdout_lines
+    - name: "Harden: remove world-read under motorcade base (optional safe default)"
+      ansible.builtin.command: >
+        bash -lc "find '{{ motorcade_base_dir }}' -xdev -type f -perm -0004 -print -exec chmod o-r {} +"
+      changed_when: false
 
-    - name: "Config | write leadgen env (root-only)"
+    - name: "Place a path manifest (non-secret) for later roles/playbooks"
       ansible.builtin.copy:
-        dest: "{{ leadgen_env_path }}"
-        owner: root
-        group: root
-        mode: "0600"
+        dest: "{{ leadgen_config_dir }}/paths.env"
+        owner: "{{ motorcade_owner }}"
+        group: "{{ motorcade_group }}"
+        mode: "0640"
         content: |
-          # Motorcade LeadGen Wave 1 API
-          LEADGEN_INTAKE_API_KEY={{ vault_leadgen_intake_api_key }}
-          LEADGEN_ADMIN_API_KEY={{ vault_leadgen_admin_api_key }}
-          # Postgres (Wave 1 persistence)
-          LEADGEN_DB_HOST=motorcade-postgres
-          LEADGEN_DB_PORT=5432
-          LEADGEN_DB_NAME=motorcade
-          LEADGEN_DB_USER=postgres
-          LEADGEN_DB_PASSWORD={{ vault_postgres_password }}
-          LEADGEN_DB_SSLMODE=disable
+          # Generated by LEADGEN_03_wave1_write_path_hardening.yml
+          MOTORCADE_BASE_DIR={{ motorcade_base_dir }}
+          LEADGEN_APP_DIR={{ leadgen_app_dir }}
+          LEADGEN_CONFIG_DIR={{ leadgen_config_dir }}
+          LEADGEN_DATA_DIR={{ leadgen_data_dir }}
+          LEADGEN_LOGS_DIR={{ leadgen_logs_dir }}
+          LEADGEN_TMP_DIR={{ leadgen_tmp_dir }}
 
-    - name: "Repo | ensure leadgen repo exists (must be present on server)"
-      ansible.builtin.stat:
-        path: "{{ leadgen_repo_dir }}/app/api/leadgen_api"
-      register: repo_stat
-      failed_when: not repo_stat.stat.exists
+    - name: "Report resulting permissions (for verification)"
+      ansible.builtin.command: >
+        bash -lc "ls -ld '{{ motorcade_base_dir }}' '{{ leadgen_app_dir }}' '{{ leadgen_config_dir }}' '{{ leadgen_data_dir }}' '{{ leadgen_logs_dir }}' '{{ leadgen_tmp_dir }}'"
+      register: perms_report
+      changed_when: false
 
-    - name: "Build | rebuild Wave 1 API image"
-      ansible.builtin.command: >-
-        {{ podman_bin }} build
-        -t {{ leadgen_image }}
-        {{ leadgen_repo_dir }}/app/api
-      register: build_result
-      changed_when: "'Successfully tagged' in (build_result.stdout + build_result.stderr)"
-
-    - name: "systemd | ensure service unit exists (installed in LEADGEN_02)"
-      ansible.builtin.stat:
-        path: "{{ service_unit_path }}"
-      register: unit_stat
-      failed_when: not unit_stat.stat.exists
-
-    - name: "systemd | daemon-reload"
-      ansible.builtin.systemd:
-        daemon_reload: true
-
-    - name: "systemd | restart leadgen api"
-      ansible.builtin.systemd:
-        name: motorcade-leadgen-api.service
-        state: restarted
-
-    - name: "Health | wait for /lead/health"
-      ansible.builtin.uri:
-        url: "{{ health_url }}"
-        method: GET
-        return_content: true
-        status_code: 200
-      register: health
-      retries: 30
-      delay: 2
-      until: health.status == 200
-
-    - name: "Report | health summary"
+    - name: "Show permission report"
       ansible.builtin.debug:
-        health_json: "{{ health.json | default({}) }}"
+        var: perms_report.stdout_lines
+
