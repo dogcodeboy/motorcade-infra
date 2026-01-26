@@ -191,6 +191,20 @@ PLAT_09B — LeadGen WordPress Bridge Finalization
 - Complete WordPress → LeadGen API bridge
 - Validate end-to-end intake flow
 
+
+### BRIDGE CONTRACT (STABLE)
+- WordPress is **non-authoritative** (presentation + intake only)
+- Bridge provides:
+  - Bridge-owned intake form (shortcode/block) posting to LeadGen intake
+  - WP Admin **read-only** viewer sourced from LeadGen admin endpoints
+- **Abandoned-form capture (progressive consent):**
+  - Local-only autosave starts immediately (browser)
+  - Server-side draft save begins only after email/phone entered + inline notice shown
+  - Continued interaction permits **one assistance follow-up**
+  - SMS/scheduling require explicit opt-in
+  - Draft TTL enforced; drafts are non-authoritative and do not create LeadGen leads unless submitted
+- **Scheduling:** Capability stubs may exist but **must remain disabled** until Scheduling container is deployed
+
 PLAT_10 — Identity Foundation (SSO + Email)
 PLAT_11 — Employee Backend Service
 PLAT_12 — Admin Panel (Control Plane MVP)
