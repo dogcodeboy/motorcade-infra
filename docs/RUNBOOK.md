@@ -13,15 +13,27 @@ This document is the **single source of truth** for build/deploy order across al
 - **prod**: live client-facing
 - **staging**: safe test lane
 
+## Reference docs (clickable)
+- [RESOURCES (hosts, service names, log commands)](./RESOURCES.md)
+- [Platform docs (vision, governance, roadmap)](./platform/)
+- [Doctrine](./doctrine/)
+- [LeadGen docs](./leadgen/)
+- [Deployments log + environment inventory](./deployments/)
+- [Policies](./policies/)
+- [Checkpoints](./checkpoints/)
+
+
 ## Current recommended order
 
 ### Website (temporary WordPress)
-1. `WP_01_services_one_and_done.yml`
-2. `WP_02_intake_and_scheduling.yml`
-3. Checkpoint + log
+1. `WP_01_services_one_and_done.yml` (repo: `motorcade.vip`)
+2. `WP_02_intake_and_scheduling.yml` (repo: `motorcade.vip`)
+3. Checkpoint + log (append-only)
 
 ### Platform (containers)
 4. `PLAT_01_docker_runtime_base.yml`
+   - Notes: Podman is installed via locked-path method (`/usr/local/bin/podman`). See: [RESOURCES](./RESOURCES.md#podman-locked-path-install)
+   - Legacy fallback (do not use unless required): [RUNBOOK_PLAT_01B_APPEND](./patches/legacy/RUNBOOK_PLAT_01B_APPEND.md)
 5. `PLAT_02A_networks_volumes_systemd_foundations.yml`
 6. `PLAT_02B_postgres_foundation.yml` (container foundation; no start)
 7. `PLAT_02C_postgres_bringup.yml` (bring-up + healthcheck; boot-disabled)
@@ -34,18 +46,40 @@ This document is the **single source of truth** for build/deploy order across al
    - Proceed next to: `PLAT_04_lead_intake_api.yml`
 10. `PLAT_04_lead_intake_api.yml`
 11. `PLAT_05_nginx_reverse_proxy_leadgen_api.yml`
+   - **NGINX FROZEN** (verified). Do not modify unless OWNER-approved.
 12. `PLAT_06_people_api.yml`
 13. `PLAT_07_reverse_proxy_routes.yml`
 14. `PLAT_08_backups_postgres_to_s3.yml`
+
+15. `PLAT_08B_redis_queue_foundation.yml`
+   - Status: COMPLETE (verified)
+   - Checkpoint: `docs/checkpoints/2026-01-24-PLAT_08B/`
+16. `PLAT_08C_redis_bringup_health_gate.yml`
+   - Status: COMPLETE (verified) — Redis responds `PONG`
+   - Notes: Redis bring-up uses readiness/health gate (no churn loops)
+17. `PLAT_08D_redis_production_stability.yml`
+   - Status: COMPLETE (verified)
+   - Checkpoint: `docs/checkpoints/2026-01-25-PLAT_08D-Redis-Production-Stability/`
+   - Notes: bounded self-healing healthcheck timer installed (`motorcade-redis-healthcheck.timer`)
+
+18. `PLAT_09A_public_site_completion.yml` (to be created; repo: `motorcade.vip`)
+   - Scope: finalize all public pages (no placeholders) + fix global layout/responsiveness
+   - Completion: desktop/tablet/mobile verified; no horizontal overflow; services menu complete (EP moved under Services)
+19. `PLAT_09B_leadgen_wordpress_bridge_finalization.yml` (to be created; repo: `motorcade-infra` + `motorcade.vip`)
+   - Scope: complete WordPress → LeadGen API bridge and validate end-to-end intake flow
+   - Completion: test submission from Contact/Assessment form produces LeadGen record; no 5xx; logs documented
+
 ### Identity (SSO / directory)
-15. `ID_01_keycloak_bootstrap.yml`
-16. `ID_02_freeipa_directory.yml`
-17. `ID_03_service_accounts_and_rbac.yml`
+20. `ID_01_keycloak_bootstrap.yml`
+21. `ID_02_freeipa_directory.yml`
+22. `ID_03_service_accounts_and_rbac.yml`
 
 ### Mail/Calendar (groupware)
-18. `MAIL_01_mailcow_deploy.yml`
-19. `MAIL_02_imap_migrate.yml`
-20. `MAIL_03_branding.yml`
+23. `MAIL_01_mailcow_deploy.yml`
+24. `MAIL_02_imap_migrate.yml`
+25. `MAIL_03_branding.yml`
+
+
 
 ## Acceptance criteria
 A step is "complete" only when:
