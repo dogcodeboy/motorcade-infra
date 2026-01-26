@@ -239,3 +239,13 @@ PLAT_19 — Governance Activation
 - Vault hygiene: `vault_postgres_password` must exist **once** (no duplicate keys). If you see a duplicate-key warning, fix the encrypted vault file (keep the value that matches `/etc/motorcade/postgres.env` on the server).
 - Nginx proxy expects the LeadGen API on `127.0.0.1:8000` (confirmed via `nginx -T`).
 
+### Next
+
+3. **LEADGEN_03 — Write-path hardening (DB-backed idempotency + intake persistence)**
+   - Playbook: `ansible/playbooks/LEADGEN_03_wave1_write_path_hardening.yml`
+   - Applies migration: `20260126_02_wave1_write_path` (adds `intake_id`, `request_id`, `idempotency_key`)
+   - Enables real intake: `POST https://motorcade.vip/api/lead/intake`
+   - Verifies:
+     - Insert into `app.leads` succeeds
+     - Duplicate `Idempotency-Key` does not create a second row
+

@@ -11,7 +11,7 @@
 #   ansible-playbook -i inventories/prod/hosts.ini playbooks/LEADGEN_02_wave1_api_deploy.yml --ask-vault-pass
 
 - name: "LEADGEN_02 — LeadGen Wave 1 API (DB persistence + read-only admin)"
-  hosts: motorcade_web
+  hosts: motorcade
   become: true
   vars:
     podman_bin: "/usr/local/bin/podman"
@@ -95,14 +95,21 @@
           # Motorcade LeadGen Wave 1 API
           LEADGEN_INTAKE_API_KEY={{ vault_leadgen_intake_api_key }}
           LEADGEN_ADMIN_API_KEY={{ vault_leadgen_admin_api_key }}
+          # Compatibility (legacy): some scripts referenced POSTGRES_PASSWORD
           POSTGRES_PASSWORD={{ vault_postgres_password }}
-          # NOTE: DB integration is Wave 2+; Wave 1 health uses stub/optional checks.
+          # Canonical (Wave 1 API): psycopg uses LEADGEN_DB_* vars
+          LEADGEN_DB_HOST=motorcade-postgres
+          LEADGEN_DB_PORT=5432
+          LEADGEN_DB_NAME=motorcade
+          LEADGEN_DB_USER=postgres
+          LEADGEN_DB_PASSWORD={{ vault_postgres_password }}
+          LEADGEN_DB_SSLMODE=disable
 
     - name: "Build | build Wave 1 API image"
       ansible.builtin.command: >
         {{ podman_bin }} build
         -t {{ leadgen_image }}
-        {{ leadgen_repo_dir }}/app/api/leadgen_api
+        {{ leadgen_repo_dir }}/app/api
       register: build_result
       changed_when: "'Successfully tagged' in (build_result.stdout + build_result.stderr)"
 

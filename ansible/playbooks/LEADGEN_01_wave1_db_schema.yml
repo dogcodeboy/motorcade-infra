@@ -8,7 +8,7 @@
 #   ansible-playbook -i inventories/prod/hosts.ini playbooks/LEADGEN_01_wave1_db_schema.yml --ask-vault-pass
 
 - name: "LEADGEN_01 — LeadGen Wave 1 DB schema"
-  hosts: motorcade_web
+  hosts: motorcade
   become: true
   vars:
     podman_bin: "/usr/local/bin/podman"

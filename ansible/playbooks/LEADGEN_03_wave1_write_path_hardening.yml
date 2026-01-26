@@ -1,0 +1,144 @@
+---
+# LEADGEN_03 — LeadGen Wave 1 write-path hardening
+#
+# What this does (one-and-done, idempotent):
+# 1) Applies DB migration 20260126_02_wave1_write_path (adds intake_id/request_id/idempotency_key)
+# 2) Ensures LeadGen env includes LEADGEN_DB_* vars + auth split keys
+# 3) Rebuilds the LeadGen API image and restarts motorcade-leadgen-api.service
+#
+# Expected:
+# - Host bind: 127.0.0.1:8000 -> container:8080
+# - POST /lead/intake persists a row in app.leads
+# - Idempotency-Key is enforced at DB-level (unique index)
+#
+# Run:
+#   cd ~/Repos/motorcade-infra/ansible
+#   ansible-playbook -i inventories/prod/hosts.ini playbooks/LEADGEN_03_wave1_write_path_hardening.yml --ask-vault-pass
+
+- name: "LEADGEN_03 — LeadGen Wave 1 write-path hardening"
+  hosts: motorcade
+  become: true
+  vars:
+    podman_bin: "/usr/local/bin/podman"
+    leadgen_repo_dir: "/opt/motorcade-leadgen"
+    leadgen_image: "localhost/motorcade-leadgen-api:wave1"
+    leadgen_container_name: "motorcade-leadgen-api"
+    leadgen_env_path: "/etc/motorcade/leadgen.env"
+    service_unit_path: "/etc/systemd/system/motorcade-leadgen-api.service"
+    host_bind: "127.0.0.1:8000"
+    container_port: "8080"
+    health_url: "http://127.0.0.1:8000/lead/health"
+    migration_sql_src: "files/leadgen/20260126_02_wave1_write_path.sql"
+    migration_sql_dst: "/tmp/20260126_02_wave1_write_path.sql"
+
+  tasks:
+    - name: "Preflight | podman present"
+      ansible.builtin.stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+      failed_when: not podman_stat.stat.exists
+
+    - name: "Preflight | motorcade-core network exists"
+      ansible.builtin.command: "{{ podman_bin }} network exists motorcade-core"
+      changed_when: false
+
+    - name: "Preflight | require vault keys"
+      ansible.builtin.assert:
+        that:
+          - vault_leadgen_intake_api_key is defined
+          - vault_leadgen_admin_api_key is defined
+          - vault_postgres_password is defined
+        fail_msg: >-
+          Missing required vault values. Ensure these are present in ansible/group_vars/motorcade/vault.yml (encrypted):
+          - vault_leadgen_intake_api_key
+          - vault_leadgen_admin_api_key
+          - vault_postgres_password
+
+    - name: "Config | ensure /etc/motorcade exists"
+      ansible.builtin.file:
+        path: "/etc/motorcade"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: "DB | stage Wave 1 write-path migration"
+      ansible.builtin.copy:
+        src: "{{ migration_sql_src }}"
+        dest: "{{ migration_sql_dst }}"
+        owner: root
+        group: root
+        mode: "0640"
+
+    - name: "DB | apply migration in motorcade-postgres"
+      ansible.builtin.command: >-
+        {{ podman_bin }} exec motorcade-postgres
+        psql -U postgres -v ON_ERROR_STOP=1 -f {{ migration_sql_dst }}
+      register: mig
+      changed_when: false
+
+    - name: "Report | migration stdout"
+      ansible.builtin.debug:
+        var: mig.stdout_lines
+
+    - name: "Config | write leadgen env (root-only)"
+      ansible.builtin.copy:
+        dest: "{{ leadgen_env_path }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          # Motorcade LeadGen Wave 1 API
+          LEADGEN_INTAKE_API_KEY={{ vault_leadgen_intake_api_key }}
+          LEADGEN_ADMIN_API_KEY={{ vault_leadgen_admin_api_key }}
+          # Postgres (Wave 1 persistence)
+          LEADGEN_DB_HOST=motorcade-postgres
+          LEADGEN_DB_PORT=5432
+          LEADGEN_DB_NAME=motorcade
+          LEADGEN_DB_USER=postgres
+          LEADGEN_DB_PASSWORD={{ vault_postgres_password }}
+          LEADGEN_DB_SSLMODE=disable
+
+    - name: "Repo | ensure leadgen repo exists (must be present on server)"
+      ansible.builtin.stat:
+        path: "{{ leadgen_repo_dir }}/app/api/leadgen_api"
+      register: repo_stat
+      failed_when: not repo_stat.stat.exists
+
+    - name: "Build | rebuild Wave 1 API image"
+      ansible.builtin.command: >-
+        {{ podman_bin }} build
+        -t {{ leadgen_image }}
+        {{ leadgen_repo_dir }}/app/api
+      register: build_result
+      changed_when: "'Successfully tagged' in (build_result.stdout + build_result.stderr)"
+
+    - name: "systemd | ensure service unit exists (installed in LEADGEN_02)"
+      ansible.builtin.stat:
+        path: "{{ service_unit_path }}"
+      register: unit_stat
+      failed_when: not unit_stat.stat.exists
+
+    - name: "systemd | daemon-reload"
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: "systemd | restart leadgen api"
+      ansible.builtin.systemd:
+        name: motorcade-leadgen-api.service
+        state: restarted
+
+    - name: "Health | wait for /lead/health"
+      ansible.builtin.uri:
+        url: "{{ health_url }}"
+        method: GET
+        return_content: true
+        status_code: 200
+      register: health
+      retries: 30
+      delay: 2
+      until: health.status == 200
+
+    - name: "Report | health summary"
+      ansible.builtin.debug:
+        health_json: "{{ health.json | default({}) }}"
