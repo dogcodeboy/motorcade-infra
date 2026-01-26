@@ -249,3 +249,57 @@ PLAT_19 — Governance Activation
      - Insert into `app.leads` succeeds
      - Duplicate `Idempotency-Key` does not create a second row
 
+
+---
+# 🔒 RUNBOOK APPEND — LEADGEN_03 (Wave 1 Write-Path Hardening)
+
+## Section: LeadGen Platform — Wave 1
+
+### LEADGEN_03 — Write-Path Hardening (Clean Rebuild)
+
+**Checkpoint ID**  
+`2026-01-26 — PLAT / LEADGEN_03 — Write-Path Hardening (Clean Rebuild)`
+
+**Status**  
+✅ **COMPLETE · VERIFIED · LOCKED**
+
+This step establishes the **first production-safe write path** for the LeadGen Wave 1 intake pipeline. It replaces all prior failed or drifted attempts and is the **authoritative baseline** for all subsequent LeadGen work.
+
+### Preconditions (Authoritative)
+- Single Ansible configuration file only at `motorcade-infra/ansible/ansible.cfg`
+- Inventory: `inventories/prod/hosts.ini`
+- Target host: `motorcade-web-01`
+- Vault: `ansible/group_vars/motorcade/vault.yml`
+- Vault execution: `--vault-id @prompt`
+
+### Vault Keys Required
+- `vault_leadgen_intake_api_key`
+- `vault_leadgen_admin_api_key`
+- `vault_postgres_password`
+
+### Playbook
+`ansible/playbooks/LEADGEN_03_wave1_write_path_hardening.yml`
+
+Execution recap:
+```
+PLAY RECAP
+motorcade-web-01 : ok=11 changed=0 failed=0
+```
+
+### Enforced Filesystem State
+- `/opt/motorcade` — 0750 root:root
+- `/opt/motorcade/leadgen` — 0750 root:root
+- `/opt/motorcade/leadgen/config` — 0750 root:root
+- `/opt/motorcade/leadgen/data` — 0750 root:root
+- `/opt/motorcade/leadgen/logs` — 0750 root:root
+- `/opt/motorcade/leadgen/tmp` — 1770 root:root (sticky)
+
+### Rules Going Forward
+- Do not introduce additional `ansible.cfg` files
+- Do not move `group_vars`
+- Do not modify LEADGEN_03 unless requirements change
+
+### Checkpoint Reference
+`docs/checkpoints/2026-01-26-PLAT-LEADGEN_03-Write-Path-Hardening-Clean-Rebuild/`
+
+Next: **Proceed to LeadGen Wave 2**
