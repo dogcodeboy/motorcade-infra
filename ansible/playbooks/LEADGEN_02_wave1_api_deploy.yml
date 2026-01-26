@@ -1,0 +1,232 @@
+---
+- name: "LEADGEN_02 — LeadGen Wave 1 API (DB persistence + read-only admin)"
+  hosts: motorcade
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/motorcade/vault.yml"
+
+  vars:
+    # Podman is installed via the project-standard static path (NOT distro packages)
+    podman_bin: "/usr/local/bin/podman"
+
+    motorcade_network: "motorcade-core"
+    leadgen_repo_url: "https://github.com/dogcodeboy/motorcade-leadgen"
+    leadgen_repo_path: "/opt/motorcade-leadgen"
+
+    leadgen_api_build_dir: "/opt/motorcade-leadgen/app/api"
+    leadgen_api_image: "localhost/motorcade-leadgen-api:wave1"
+    leadgen_api_container: "motorcade-leadgen-api"
+    leadgen_api_service: "motorcade-leadgen-api.service"
+
+    leadgen_env_dir: "/etc/motorcade"
+    leadgen_env_file: "/etc/motorcade/leadgen.env"
+
+    # LeadGen connects to Postgres via the motorcade-core network
+    leadgen_db_host: "motorcade-postgres"
+    leadgen_db_port: 5432
+    leadgen_db_name: "motorcade"
+    leadgen_db_user: "postgres"
+
+    # IMPORTANT: Nginx (already shipped/locked) proxies to 127.0.0.1:8000
+    # Container listens on 8080 internally; we publish host 8000 -> container 8080.
+    leadgen_bind_ip: "127.0.0.1"
+    leadgen_host_port: 8000
+    leadgen_container_port: 8080
+
+  tasks:
+    - name: "Preflight | podman present"
+      ansible.builtin.command: "{{ podman_bin }} --version"
+      register: podman_version
+      changed_when: false
+
+    - name: "Preflight | motorcade-core network exists"
+      ansible.builtin.command: "{{ podman_bin }} network exists {{ motorcade_network }}"
+      register: net_exists
+      changed_when: false
+
+    - name: "Preflight | git present"
+      ansible.builtin.command: /usr/bin/git --version
+      register: git_version
+      changed_when: false
+
+    - name: "Preflight | require vault keys for Wave 1 auth split"
+      ansible.builtin.assert:
+        that:
+          - vault_leadgen_intake_api_key is defined
+          - (vault_leadgen_intake_api_key | length) >= 24
+          - vault_leadgen_admin_api_key is defined
+          - (vault_leadgen_admin_api_key | length) >= 24
+          - vault_postgres_password is defined
+          - (vault_postgres_password | length) >= 12
+        fail_msg: >
+          Missing required vault values. Ensure these are present in
+          ansible/group_vars/motorcade/vault.yml (encrypted):
+          - vault_leadgen_intake_api_key
+          - vault_leadgen_admin_api_key
+          - vault_postgres_password
+
+    - name: "Filesystem | ensure /opt exists"
+      ansible.builtin.file:
+        path: "/opt"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Repo | clone/update motorcade-leadgen"
+      ansible.builtin.git:
+        repo: "{{ leadgen_repo_url }}"
+        dest: "{{ leadgen_repo_path }}"
+        version: "main"
+        update: true
+
+    - name: "Config | ensure /etc/motorcade exists"
+      ansible.builtin.file:
+        path: "{{ leadgen_env_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: "Config | write leadgen env (root-only)"
+      no_log: true
+      ansible.builtin.copy:
+        dest: "{{ leadgen_env_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          # Wave 1 auth split
+          LEADGEN_INTAKE_API_KEY={{ vault_leadgen_intake_api_key }}
+          LEADGEN_ADMIN_API_KEY={{ vault_leadgen_admin_api_key }}
+
+          # DB
+          LEADGEN_DB_HOST={{ leadgen_db_host }}
+          LEADGEN_DB_PORT={{ leadgen_db_port }}
+          LEADGEN_DB_NAME={{ leadgen_db_name }}
+          LEADGEN_DB_USER={{ leadgen_db_user }}
+          LEADGEN_DB_PASSWORD={{ vault_postgres_password }}
+          LEADGEN_DB_SSLMODE=disable
+
+          # Service identity
+          LEADGEN_ENV=prod
+          LEADGEN_SERVICE_NAME=motorcade-leadgen-api
+          LEADGEN_SERVICE_VERSION=wave1
+
+    - name: "Build | build Wave 1 API image"
+      ansible.builtin.command:
+        chdir: "{{ leadgen_api_build_dir }}"
+        argv:
+          - "{{ podman_bin }}"
+          - build
+          - --pull=never
+          - -t
+          - "{{ leadgen_api_image }}"
+          - -f
+          - Containerfile
+          - .
+      register: build_out
+      changed_when: "build_out.rc == 0"
+
+    - name: "systemd | install motorcade-leadgen-api.service"
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ leadgen_api_service }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade LeadGen API (Wave 1)
+          After=network-online.target
+          Wants=network-online.target
+          Wants=motorcade-postgres.service
+          After=motorcade-postgres.service
+          Requires=motorcade-platform.target
+
+          [Service]
+          Type=simple
+          EnvironmentFile={{ leadgen_env_file }}
+          # Ensure stale container name doesn't block restarts
+          ExecStartPre=-{{ podman_bin }} rm -f {{ leadgen_api_container }}
+          ExecStart={{ podman_bin }} run --rm --name {{ leadgen_api_container }} \
+            --network {{ motorcade_network }} \
+            -p {{ leadgen_bind_ip }}:{{ leadgen_host_port }}:{{ leadgen_container_port }} \
+            --env-file {{ leadgen_env_file }} \
+            {{ leadgen_api_image }}
+          ExecStop={{ podman_bin }} stop -t 10 {{ leadgen_api_container }}
+          Restart=on-failure
+          RestartSec=3
+
+          [Install]
+          WantedBy=motorcade-platform.target
+
+    - name: "systemd | daemon-reload"
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: "systemd | enable + restart leadgen api"
+      ansible.builtin.systemd:
+        name: "{{ leadgen_api_service }}"
+        enabled: true
+        state: restarted
+
+    - name: "Health | wait for /lead/health on the port Nginx expects (8000)"
+      block:
+        - name: "Health | wait for /lead/health"
+          ansible.builtin.uri:
+            url: "http://{{ leadgen_bind_ip }}:{{ leadgen_host_port }}/lead/health"
+            method: GET
+            return_content: true
+            status_code: 200
+          register: health
+          retries: 30
+          delay: 2
+          until: health.status == 200
+
+      rescue:
+        - name: "Diagnostics | systemd status"
+          ansible.builtin.command: "/usr/bin/systemctl --no-pager -l status {{ leadgen_api_service }}"
+          register: svc_status
+          changed_when: false
+          failed_when: false
+
+        - name: "Diagnostics | last 200 journal lines"
+          ansible.builtin.command: "/usr/bin/journalctl --no-pager -u {{ leadgen_api_service }} -n 200"
+          register: svc_journal
+          changed_when: false
+          failed_when: false
+
+        - name: "Diagnostics | podman ps"
+          ansible.builtin.command: "{{ podman_bin }} ps -a --format '{{'{{'}}.Names{{'}}'}}\t{{'{{'}}.Status{{'}}'}}\t{{'{{'}}.Ports{{'}}'}}'"
+          register: podman_ps
+          changed_when: false
+          failed_when: false
+
+        - name: "Diagnostics | podman logs (if container exists)"
+          ansible.builtin.command: "{{ podman_bin }} logs --tail 200 {{ leadgen_api_container }}"
+          register: podman_logs
+          changed_when: false
+          failed_when: false
+
+        - name: "Fail with diagnostics"
+          ansible.builtin.fail:
+            msg: |
+              Health check failed: http://{{ leadgen_bind_ip }}:{{ leadgen_host_port }}/lead/health
+
+              --- systemd status ---
+              {{ svc_status.stdout | default('') }}
+
+              --- journalctl ---
+              {{ svc_journal.stdout | default('') }}
+
+              --- podman ps ---
+              {{ podman_ps.stdout | default('') }}
+
+              --- podman logs ---
+              {{ podman_logs.stdout | default('') }}
+
+    - name: "Report | health summary"
+      ansible.builtin.debug:
+        var: health.json

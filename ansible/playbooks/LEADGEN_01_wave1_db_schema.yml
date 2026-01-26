@@ -1,0 +1,132 @@
+---
+- name: LEADGEN_01 — LeadGen Wave 1 DB schema (app.leads) + migration ledger
+  hosts: motorcade-web-01
+  become: true
+  gather_facts: true
+
+  vars:
+    pg_service_name: motorcade-postgres.service
+    pg_container_name: motorcade-postgres
+    db_name: motorcade
+
+    backup_dir: /var/backups/motorcade/postgres/schema
+    migration_version: "20260126_01_wave1_leads"
+
+    # Ship the migration to the HOST, then pipe it into psql inside the container.
+    local_migration_sql: "{{ playbook_dir }}/../files/leadgen/migrations/{{ migration_version }}.sql"
+    remote_migration_path: "/tmp/{{ migration_version }}.sql"
+
+  tasks:
+    - name: Ensure Postgres service is running (boot-disabled preserved)
+      ansible.builtin.systemd:
+        name: "{{ pg_service_name }}"
+        state: started
+        enabled: false
+
+    - name: Ensure backup directory exists
+      ansible.builtin.file:
+        path: "{{ backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Check if app schema exists (bootstrap-safe)
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - -lc
+          - |
+            set -euo pipefail
+            /usr/local/bin/podman exec {{ pg_container_name }}               psql -U postgres -d {{ db_name }} -tAc "SELECT 1 FROM pg_namespace WHERE nspname='app'"
+      register: app_schema_exists
+      changed_when: false
+      no_log: false
+
+    - name: Backup app schema (schema-only) before applying migration (only if schema exists)
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - -lc
+          - |
+            set -euo pipefail
+            ts="$(date -u +%Y%m%dT%H%M%SZ)"
+            out="{{ backup_dir }}/app.schema_only.${ts}.sql"
+            /usr/local/bin/podman exec {{ pg_container_name }} pg_dump               -U postgres               -d {{ db_name }}               --schema=app               --schema-only > "$out"
+            echo "$out"
+      when: app_schema_exists.stdout | trim == "1"
+      register: schema_backup
+      changed_when: true
+      no_log: false
+
+    - name: Print schema backup path (or bootstrap notice)
+      ansible.builtin.debug:
+        msg: >-
+          {% if (app_schema_exists.stdout | trim) == "1" %}
+          Schema-only backup created: {{ (schema_backup.stdout | default('')).strip() }}
+          {% else %}
+          Bootstrap: schema 'app' does not exist yet, so schema-only backup was skipped (expected on first run).
+          {% endif %}
+      changed_when: false
+
+    - name: Copy migration SQL to target (host)
+      ansible.builtin.copy:
+        src: "{{ local_migration_sql }}"
+        dest: "{{ remote_migration_path }}"
+        owner: root
+        group: root
+        mode: "0640"
+
+    - name: Ensure app schema exists (required before migration references app.*)
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - -lc
+          - |
+            set -euo pipefail
+            /usr/local/bin/podman exec {{ pg_container_name }}               psql -U postgres -d {{ db_name }} -v ON_ERROR_STOP=1               -c "CREATE SCHEMA IF NOT EXISTS app;"
+      changed_when: false
+      no_log: false
+
+    - name: Apply migration inside Postgres container (pipe host file into container psql)
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - -lc
+          - |
+            set -euo pipefail
+            cat {{ remote_migration_path }} | /usr/local/bin/podman exec -i {{ pg_container_name }}               psql -U postgres -d {{ db_name }} -v ON_ERROR_STOP=1
+      register: apply_migration
+      changed_when: true
+      no_log: false
+
+    - name: Verify leads table exists
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - -lc
+          - |
+            set -euo pipefail
+            /usr/local/bin/podman exec {{ pg_container_name }}               psql -U postgres -d {{ db_name }} -v ON_ERROR_STOP=1 -c "\dt+ app.leads"
+      register: verify_table
+      changed_when: false
+      no_log: false
+
+    - name: Verify migration ledger contains version
+      ansible.builtin.command:
+        argv:
+          - /bin/bash
+          - -lc
+          - |
+            set -euo pipefail
+            /usr/local/bin/podman exec {{ pg_container_name }}               psql -U postgres -d {{ db_name }} -v ON_ERROR_STOP=1               -c "SELECT version, applied_at FROM app.schema_migrations WHERE version='{{ migration_version }}';"
+      register: verify_migration
+      changed_when: false
+      no_log: false
+
+    - name: Show verification output
+      ansible.builtin.debug:
+        msg:
+          - "{{ verify_table.stdout | default('') }}"
+          - "{{ verify_migration.stdout | default('') }}"
+      changed_when: false
