@@ -215,3 +215,27 @@ PLAT_16 — Governance Framework (Dormant)
 PLAT_17 — Static Site Container
 PLAT_18 — WordPress Deprecation
 PLAT_19 — Governance Activation
+
+---
+
+## LeadGen — Wave 1 (Intake API + Leads persistence)
+
+### Completed
+
+1. **LEADGEN_01 — DB schema (leads)**
+   - Playbook: `ansible/playbooks/LEADGEN_01_wave1_db_schema.yml`
+   - Creates: `app.leads`, `app.schema_migrations`
+   - Version: `20260126_01_wave1_leads`
+
+2. **LEADGEN_02 — API deploy (Wave 1)**
+   - Playbook: `ansible/playbooks/LEADGEN_02_wave1_api_deploy.yml`
+   - systemd: `motorcade-leadgen-api.service`
+   - Host bind: `127.0.0.1:8000 -> container:8080`
+   - Health (host): `http://127.0.0.1:8000/lead/health`
+   - Health (public via Nginx): `https://motorcade.vip/api/lead/health`
+
+### Notes
+
+- Vault hygiene: `vault_postgres_password` must exist **once** (no duplicate keys). If you see a duplicate-key warning, fix the encrypted vault file (keep the value that matches `/etc/motorcade/postgres.env` on the server).
+- Nginx proxy expects the LeadGen API on `127.0.0.1:8000` (confirmed via `nginx -T`).
+

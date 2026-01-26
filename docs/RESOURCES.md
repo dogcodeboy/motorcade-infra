@@ -28,3 +28,23 @@ sudo systemctl status motorcade-redis-healthcheck.timer --no-pager -l
 This environment uses Podman installed via non-standard method (do not assume dnf/rpm paths).
 
 - Expected binary path: `/usr/local/bin/podman`
+
+---
+
+## LeadGen API (Wave 1)
+
+**systemd**
+- `motorcade-leadgen-api.service`
+
+**Container**
+- Name: `motorcade-leadgen-api`
+- Image: `localhost/motorcade-leadgen-api:wave1`
+- Network: `motorcade-core`
+- Port mapping: `127.0.0.1:8000 -> 8080/tcp`
+
+**Config**
+- `/etc/motorcade/leadgen.env` (root-only)
+
+**Health**
+- Host: `http://127.0.0.1:8000/lead/health`
+- Public: `https://motorcade.vip/api/lead/health` (via Nginx include: `motorcade-leadgen-api.conf`)

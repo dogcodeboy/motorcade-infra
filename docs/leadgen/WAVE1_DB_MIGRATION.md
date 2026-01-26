@@ -1,27 +1,27 @@
-# LeadGen Wave 1 — DB Migration (app.leads)
+# LeadGen Wave 1 — DB Migration
 
-This drop-in adds the **Wave 1 durable persistence** table (`app.leads`) and the migration ledger (`app.schema_migrations`).
-
-## Apply (industry-standard order)
-1) Backup-first (schema-only)
-2) Apply migration
-3) Verify table + ledger
-
-## Preferred command (run from motorcade-infra repo)
-```bash
-cd ~/Repos/motorcade-infra
-bash scripts/leadgen/run_wave1_db_migration.sh
-```
+This wave adds the initial **Lead Intake** persistence layer.
 
 ## What it creates
-- `app.schema_migrations` (tracks applied migrations by version string)
-- `app.leads` (Wave 1 lead storage)
-  - consent_state constrained to: `local_only`, `server_draft`, `opted_in`
-  - `ip_hash` stored (never raw IP)
-  - `idempotency_key` unique when present
 
-## Verify manually
+- Schema: `app`
+- Table: `app.leads`
+- Ledger: `app.schema_migrations` (records applied version)
+
+Migration file:
+- `ansible/files/leadgen/20260126_01_wave1_leads.sql`
+
+## Run (from your workstation)
+
 ```bash
-sudo podman exec motorcade-postgres psql -U postgres -d motorcade -c "\dt+ app.leads"
-sudo podman exec motorcade-postgres psql -U postgres -d motorcade -c "SELECT * FROM app.schema_migrations ORDER BY applied_at DESC LIMIT 5;"
+cd ~/Repos/motorcade-infra/ansible
+
+ansible-playbook -i inventories/prod/hosts.ini   playbooks/LEADGEN_01_wave1_db_schema.yml   --ask-vault-pass
+```
+
+## Verify (on server)
+
+```bash
+sudo /usr/local/bin/podman exec motorcade-postgres psql -U postgres -v ON_ERROR_STOP=1 -c "\dt app.*"
+sudo /usr/local/bin/podman exec motorcade-postgres psql -U postgres -v ON_ERROR_STOP=1 -c "select * from app.schema_migrations order by applied_at desc;"
 ```
