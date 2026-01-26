@@ -20,3 +20,7 @@ See `VERIFY.md`.
 ## Do not
 - Do not expose LeadGen directly to public internet; keep bind on `127.0.0.1:8000` and proxy via nginx.
 - Do not remove `--vault-id @prompt` usage; vault is authoritative in `ansible/group_vars/motorcade/vault.yml`.
+
+
+## Patch
+- Corrected systemd unit: `StartLimitIntervalSec` and `StartLimitBurst` belong in `[Unit]` (systemd previously logged an 'Unknown key' warning when placed under `[Service]`).

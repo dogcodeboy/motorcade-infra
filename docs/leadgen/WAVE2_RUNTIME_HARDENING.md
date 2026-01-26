@@ -55,3 +55,7 @@ sudo systemctl disable --now motorcade-leadgen-watchdog.timer
 sudo systemctl daemon-reload
 sudo systemctl restart motorcade-leadgen-api
 ```
+
+
+## Note
+- `StartLimitIntervalSec` / `StartLimitBurst` are set in the `[Unit]` section of the systemd service (systemd ignores them in `[Service]`).
