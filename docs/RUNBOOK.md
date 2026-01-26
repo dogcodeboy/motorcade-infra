@@ -92,10 +92,19 @@ Proceed with **Podman / container services** and platform orchestration work (e.
   - Network: motorcade-core
   - Persistent volume: /srv/motorcade/volumes/redis
 
+- PLAT_08C — Redis bring-up (stability workstream)
+  - Prior bring-up churn resolved by adopting bounded, self-healing healthcheck approach
+  - Host naming corrected: use inventory host `motorcade-web-01` (never `motorcade_web`)
+
+- PLAT_08D — Redis Production Stability (Healthcheck Timer)
+  - Installs bounded + self-healing healthcheck script
+  - Installs and enables `motorcade-redis-healthcheck.timer`
+  - Verified Redis responds `PONG` and timer is active
+
 ### Active / Next
-- PLAT_08C — Redis bring-up + health gate for dependent services
-  - Explicit enable/start
-  - Readiness and dependency verification
+- Next subsystem per RUNBOOK “Next Subsystem (Non-nginx)”
+  - Do not reopen nginx freeze items
+  - Continue from the next PLAT_* step already listed below in this RUNBOOK
 
 ### Notes
 - Nginx stack remains frozen and verified; do not reopen.
@@ -104,9 +113,10 @@ Proceed with **Podman / container services** and platform orchestration work (e.
 
 ### Operator Guidance
 - Refer to `docs/user-preferences.md` for authoritative session and build preferences.
-
+- New resource: `docs/RESOURCES.md` (system paths, unit names, log commands)
 
 ---
+
 ## APPEND — 2026-01-25 — PLAT_08C Redis Bring-Up Blocked (Stability)
 
 ### What happened
@@ -147,6 +157,12 @@ ansible-playbook -i inventories/prod/hosts.ini \
 - `motorcade-redis-healthcheck.timer` (runs every minute)
 
 ### Verify
+
+### Result (Verified 2026-01-25)
+- Play recap: ok=13 changed=5 failed=0
+- Output confirmed: `Redis is responding (PONG)`
+- Timer enabled: `motorcade-redis-healthcheck.timer`
+
 
 On the server:
 
