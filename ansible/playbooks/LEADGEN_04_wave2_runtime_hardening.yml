@@ -1,0 +1,294 @@
+---
+# LEADGEN_04 — LeadGen Wave 2 runtime hardening (production stability)
+#
+# Scope: runtime + ops hardening ONLY (no business logic changes)
+#
+# What this does:
+# - Hardens systemd unit for motorcade-leadgen-api.service (restart policy, limits, deterministic behavior)
+# - Uses safer podman run flags (resource caps, log rotation, least privilege where compatible)
+# - Installs a watchdog timer that probes /lead/health and restarts the service on failure
+# - Adds preflight drift guards (vault keys non-empty, env file exists, expected network present)
+#
+# Run:
+#   cd ~/Repos/motorcade-infra/ansible
+#   ansible-playbook -i inventories/prod/hosts.ini playbooks/LEADGEN_04_wave2_runtime_hardening.yml --vault-id @prompt
+
+- name: "LEADGEN_04 — LeadGen Wave 2 runtime hardening"
+  hosts: motorcade
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - "{{ playbook_dir }}/../group_vars/motorcade/vault.yml"
+    - "{{ playbook_dir }}/../group_vars/motorcade/main.yml"
+
+  vars:
+    podman_bin: "/usr/local/bin/podman"
+
+    # Service/container identity
+    leadgen_image: "localhost/motorcade-leadgen-api:wave1"
+    leadgen_container_name: "motorcade-leadgen-api"
+    service_unit_path: "/etc/systemd/system/motorcade-leadgen-api.service"
+
+    # Network + binds (keep API private; nginx is the public edge)
+    motorcade_network: "motorcade-core"
+    host_bind: "127.0.0.1:8000"
+    container_port: "8080"
+    health_url: "http://127.0.0.1:8000/lead/health"
+
+    # Canonical env file (written by LEADGEN_02/03; Wave 2 enforces permissions + presence)
+    leadgen_env_path: "/etc/motorcade/leadgen.env"
+
+    # Paths created/hardened by LEADGEN_03 (Wave 2 relies on these)
+    leadgen_tmp_dir: "/opt/motorcade/leadgen/tmp"
+    leadgen_logs_dir: "/opt/motorcade/leadgen/logs"
+    leadgen_data_dir: "/opt/motorcade/leadgen/data"
+
+    # Resource caps (override in group_vars if needed)
+    leadgen_memory: "1024m"
+    leadgen_pids_limit: "512"
+    leadgen_ulimit_nofile: "65536:65536"
+
+    # Podman log rotation (avoid journald churn; keep logs bounded)
+    podman_log_driver: "k8s-file"
+    podman_log_max_size: "10m"
+    podman_log_max_file: "5"
+
+    # Watchdog tuning
+    watchdog_interval_sec: 30
+    watchdog_retries: 3
+    watchdog_delay_sec: 2
+
+  pre_tasks:
+    - name: "Preflight | (controller) detect duplicate ansible.cfg up the tree (drift guard)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd "{{ playbook_dir }}/.."
+        # Find ansible.cfg in repo tree; allow exactly 1 at ansible/ansible.cfg
+        python3 - <<'PY'
+        import os
+        from pathlib import Path
+        root = Path(".").resolve()
+        cfgs = [p for p in root.rglob("ansible.cfg")]
+        # Normalize
+        cfgs = [p for p in cfgs if p.is_file()]
+        print("\n".join(str(p) for p in cfgs))
+        if len(cfgs) != 1:
+            raise SystemExit(f"ERROR: expected exactly 1 ansible.cfg, found {len(cfgs)}")
+        # Enforce expected location
+        exp = root/"ansible.cfg"
+        if cfgs[0].resolve() != exp.resolve():
+            raise SystemExit(f"ERROR: ansible.cfg must be at {exp}, found {cfgs[0]}")
+        PY
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: false
+
+    - name: "Preflight | podman present"
+      ansible.builtin.stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+      failed_when: not podman_stat.stat.exists
+
+    - name: "Preflight | motorcade-core network exists"
+      ansible.builtin.command: "{{ podman_bin }} network exists {{ motorcade_network }}"
+      changed_when: false
+
+    - name: "Preflight | required vault keys non-empty (auth + DB)"
+      ansible.builtin.assert:
+        that:
+          - vault_leadgen_intake_api_key is defined and (vault_leadgen_intake_api_key | string | length) > 0
+          - vault_leadgen_admin_api_key is defined and (vault_leadgen_admin_api_key | string | length) > 0
+          - vault_postgres_password is defined and (vault_postgres_password | string | length) > 0
+        fail_msg: >-
+          Missing required vault values (empty or undefined). Fix ansible/group_vars/motorcade/vault.yml (encrypted).
+
+    - name: "Preflight | leadgen env file exists"
+      ansible.builtin.stat:
+        path: "{{ leadgen_env_path }}"
+      register: leadgen_env_stat
+      failed_when: not leadgen_env_stat.stat.exists
+
+  tasks:
+    - name: "Config | enforce /etc/motorcade permissions"
+      ansible.builtin.file:
+        path: "/etc/motorcade"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: "Config | enforce leadgen env permissions (root-only)"
+      ansible.builtin.file:
+        path: "{{ leadgen_env_path }}"
+        state: file
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: "Filesystem | ensure Wave 1 paths exist (no loosening)"
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ leadgen_data_dir }}", mode: "0750" }
+        - { path: "{{ leadgen_logs_dir }}", mode: "0750" }
+        - { path: "{{ leadgen_tmp_dir }}",  mode: "1770" }
+
+    - name: "systemd | install hardened motorcade-leadgen-api.service (Wave 2)"
+      ansible.builtin.copy:
+        dest: "{{ service_unit_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade LeadGen API (Wave 1) — Hardened Runtime (Wave 2)
+          Wants=network-online.target
+          After=network-online.target motorcade-postgres.service
+          # Start postgres if it is managed by systemd
+          Wants=motorcade-postgres.service
+
+          [Service]
+          Type=simple
+
+          # Hardening / stability
+          Restart=always
+          RestartSec=3
+          StartLimitIntervalSec=60
+          StartLimitBurst=10
+          TimeoutStartSec=120
+          TimeoutStopSec=30
+          KillMode=control-group
+
+          # Environment
+          Environment=PODMAN_BIN={{ podman_bin }}
+          Environment=LEADGEN_ENV={{ leadgen_env_path }}
+          Environment=LEADGEN_NET={{ motorcade_network }}
+          Environment=LEADGEN_IMAGE={{ leadgen_image }}
+          Environment=LEADGEN_NAME={{ leadgen_container_name }}
+          Environment=LEADGEN_BIND={{ host_bind }}
+          Environment=LEADGEN_PORT={{ container_port }}
+
+          # Fail fast if env is missing
+          ExecStartPre=/usr/bin/test -f {{ leadgen_env_path }}
+          ExecStartPre=/usr/bin/test -x {{ podman_bin }}
+          ExecStartPre={{ podman_bin }} rm -f {{ leadgen_container_name }}
+
+          # Run (keep API private; nginx is the edge)
+          ExecStart={{ podman_bin }} run --rm --name {{ leadgen_container_name }} \
+            --network {{ motorcade_network }} \
+            --env-file {{ leadgen_env_path }} \
+            -p {{ host_bind }}:{{ container_port }} \
+            --log-driver {{ podman_log_driver }} \
+            --log-opt max-size={{ podman_log_max_size }} \
+            --log-opt max-file={{ podman_log_max_file }} \
+            --memory {{ leadgen_memory }} \
+            --pids-limit {{ leadgen_pids_limit }} \
+            --ulimit nofile={{ leadgen_ulimit_nofile }} \
+            --security-opt no-new-privileges \
+            --cap-drop=all \
+            --read-only \
+            -v {{ leadgen_tmp_dir }}:/tmp:Z \
+            {{ leadgen_image }}
+
+          ExecStop={{ podman_bin }} stop -t 10 {{ leadgen_container_name }}
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: "Watchdog | install script"
+      ansible.builtin.copy:
+        dest: "/usr/local/bin/motorcade-leadgen-watchdog.sh"
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          URL="{{ health_url }}"
+          RETRIES="{{ watchdog_retries }}"
+          DELAY="{{ watchdog_delay_sec }}"
+          for i in $(seq 1 "$RETRIES"); do
+            if curl -fsS --max-time 5 "$URL" >/dev/null; then
+              exit 0
+            fi
+            sleep "$DELAY"
+          done
+          echo "LeadGen watchdog: health failed after ${RETRIES} attempts; restarting motorcade-leadgen-api.service" >&2
+          systemctl restart motorcade-leadgen-api.service
+
+    - name: "Watchdog | install systemd unit"
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/motorcade-leadgen-watchdog.service"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade LeadGen watchdog (probe /lead/health)
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/motorcade-leadgen-watchdog.sh
+
+    - name: "Watchdog | install timer"
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/motorcade-leadgen-watchdog.timer"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade LeadGen watchdog timer
+
+          [Timer]
+          OnBootSec=30
+          OnUnitActiveSec={{ watchdog_interval_sec }}
+          AccuracySec=5
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+
+    - name: "systemd | daemon-reload"
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: "systemd | enable + restart leadgen api"
+      ansible.builtin.systemd:
+        name: motorcade-leadgen-api.service
+        enabled: true
+        state: restarted
+
+    - name: "systemd | enable + start watchdog timer"
+      ansible.builtin.systemd:
+        name: motorcade-leadgen-watchdog.timer
+        enabled: true
+        state: started
+
+    - name: "Health | wait for /lead/health"
+      ansible.builtin.uri:
+        url: "{{ health_url }}"
+        method: GET
+        return_content: false
+        status_code: 200
+      register: health
+      retries: 30
+      delay: 2
+      until: health.status == 200
+
+    - name: "Report | runtime summary"
+      ansible.builtin.debug:
+        msg:
+          - "LeadGen API unit: {{ service_unit_path }}"
+          - "Watchdog: motorcade-leadgen-watchdog.timer ({{ watchdog_interval_sec }}s)"
+          - "Health: {{ health_url }}"
