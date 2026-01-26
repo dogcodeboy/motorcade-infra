@@ -92,19 +92,10 @@ Proceed with **Podman / container services** and platform orchestration work (e.
   - Network: motorcade-core
   - Persistent volume: /srv/motorcade/volumes/redis
 
-- PLAT_08C — Redis bring-up (stability workstream)
-  - Prior bring-up churn resolved by adopting bounded, self-healing healthcheck approach
-  - Host naming corrected: use inventory host `motorcade-web-01` (never `motorcade_web`)
-
-- PLAT_08D — Redis Production Stability (Healthcheck Timer)
-  - Installs bounded + self-healing healthcheck script
-  - Installs and enables `motorcade-redis-healthcheck.timer`
-  - Verified Redis responds `PONG` and timer is active
-
 ### Active / Next
-- Next subsystem per RUNBOOK “Next Subsystem (Non-nginx)”
-  - Do not reopen nginx freeze items
-  - Continue from the next PLAT_* step already listed below in this RUNBOOK
+- PLAT_08C — Redis bring-up + health gate for dependent services
+  - Explicit enable/start
+  - Readiness and dependency verification
 
 ### Notes
 - Nginx stack remains frozen and verified; do not reopen.
@@ -113,10 +104,9 @@ Proceed with **Podman / container services** and platform orchestration work (e.
 
 ### Operator Guidance
 - Refer to `docs/user-preferences.md` for authoritative session and build preferences.
-- New resource: `docs/RESOURCES.md` (system paths, unit names, log commands)
+
 
 ---
-
 ## APPEND — 2026-01-25 — PLAT_08C Redis Bring-Up Blocked (Stability)
 
 ### What happened
@@ -137,45 +127,43 @@ Proceed with **Podman / container services** and platform orchestration work (e.
 
 ---
 
-## PLAT_08D — Redis Production Stability (Healthcheck Timer)
+## PLAT_08C (Fix6) — Redis Bring-up Churn Stopper (Unit Rewrite + Volume Perms + SELinux)
 
-**Purpose**: Adds a *bounded*, timer-based Redis health check that self-heals by restarting `motorcade-redis` if the container disappears or `redis-cli ping` fails. This avoids long-running “readiness daemons” and prevents silent drift.
+If `motorcade-redis.service` is in an auto-restart loop and `podman exec motorcade-redis redis-cli ping` fails because the container is missing, apply Fix6.
 
-### Run
-
+**Run:**
 ```bash
 cd ~/Repos/motorcade-infra/ansible
-ansible-playbook -i inventories/prod/hosts.ini \
-  playbooks/PLAT_08D_redis_production_stability.yml \
-  --ask-vault-pass
+ansible-playbook -i inventories/prod/hosts.ini playbooks/PLAT_08C_redis_bringup_health_gate.yml --ask-vault-pass
 ```
 
-### What it installs
-
-- `/usr/local/libexec/motorcade/redis_healthcheck.sh`
-- `motorcade-redis-healthcheck.service` (oneshot)
-- `motorcade-redis-healthcheck.timer` (runs every minute)
-
-### Verify
-
-### Result (Verified 2026-01-25)
-- Play recap: ok=13 changed=5 failed=0
-- Output confirmed: `Redis is responding (PONG)`
-- Timer enabled: `motorcade-redis-healthcheck.timer`
-
-
-On the server:
-
-```bash
-sudo systemctl is-active motorcade-redis
-sudo /usr/local/bin/podman ps --filter name=motorcade-redis
-sudo /usr/local/bin/podman exec motorcade-redis redis-cli ping
-
-sudo systemctl status motorcade-redis-healthcheck.timer --no-pager
-sudo journalctl -u motorcade-redis-healthcheck.service -n 50 --no-pager
-```
-
-**Pass criteria**:
+**Expected:**
+- `podman ps --filter name=motorcade-redis` shows **Up**
 - `redis-cli ping` returns **PONG**
-- `motorcade-redis-healthcheck.timer` is **active (running)**
-- If Redis is stopped/killed, the timer run restarts it within ~60s
+
+
+────────────────────────────────
+FUTURE PLATFORM WORKSTREAM (POST-PLAT_08D)
+────────────────────────────────
+
+PLAT_09 — Public Site & LeadGen Completion
+
+PLAT_09A — Public Site Completion (Content + Layout)
+- Finalize all public-facing pages (no placeholders)
+- Fix global layout and responsiveness issues
+- Verify desktop, tablet, and mobile behavior
+
+PLAT_09B — LeadGen WordPress Bridge Finalization
+- Complete WordPress → LeadGen API bridge
+- Validate end-to-end intake flow
+
+PLAT_10 — Identity Foundation (SSO + Email)
+PLAT_11 — Employee Backend Service
+PLAT_12 — Admin Panel (Control Plane MVP)
+PLAT_13 — Client & Contract Operations
+PLAT_14 — Billing Operations
+PLAT_15 — Audit & Evidence Foundations
+PLAT_16 — Governance Framework (Dormant)
+PLAT_17 — Static Site Container
+PLAT_18 — WordPress Deprecation
+PLAT_19 — Governance Activation
