@@ -1,0 +1,119 @@
+---
+# LEADGEN_06_configure_api_keys.yml
+# Purpose: Ensure LeadGen API container has server-side API keys configured via env-file, then restart service.
+# Safe: Does NOT print secret values. Requires --ask-vault-pass.
+#
+# Expectations:
+# - The LeadGen API is managed by a systemd unit named motorcade-leadgen-api.service
+# - The unit uses: --env-file /etc/motorcade/leadgen.env
+#
+# Notes:
+# - The API expects LEADGEN_API_KEY inside the container. By default we set it equal to the intake key,
+#   unless you provide a separate vault_leadgen_api_key.
+
+- name: "LEADGEN_06 — Configure LeadGen API keys (server-side) + restart"
+  hosts: motorcade
+  become: true
+  gather_facts: true
+
+  vars:
+    leadgen_service_name: "motorcade-leadgen-api"
+    leadgen_env_dir: "/etc/motorcade"
+    leadgen_env_file: "/etc/motorcade/leadgen.env"
+
+  pre_tasks:
+    - name: "Preflight | required vault keys non-empty (auth)"
+      ansible.builtin.assert:
+        that:
+          - vault_leadgen_intake_api_key is defined
+          - (vault_leadgen_intake_api_key | string | length) > 0
+          - vault_leadgen_admin_api_key is defined
+          - (vault_leadgen_admin_api_key | string | length) > 0
+        fail_msg: "Missing/empty vault_* API key(s). Fix ansible/group_vars/motorcade/vault.yml (or your canonical vault)."
+        success_msg: "Vault assertions passed (names only)."
+      no_log: true
+
+    - name: "Preflight | systemd unit exists"
+      ansible.builtin.command: "systemctl cat {{ leadgen_service_name }}.service"
+      register: unit_cat
+      changed_when: false
+
+    - name: "Preflight | unit references leadgen env file"
+      ansible.builtin.assert:
+        that:
+          - (unit_cat.stdout is search(leadgen_env_file | regex_escape))
+        fail_msg: "Systemd unit for {{ leadgen_service_name }} does not reference {{ leadgen_env_file }}. Fix the unit or update leadgen_env_file in this playbook."
+      changed_when: false
+
+  tasks:
+    - name: "Ensure env dir exists"
+      ansible.builtin.file:
+        path: "{{ leadgen_env_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: "Ensure LeadGen env file exists (preserve existing config)"
+      ansible.builtin.file:
+        path: "{{ leadgen_env_file }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: "Set LeadGen intake API key"
+      ansible.builtin.lineinfile:
+        path: "{{ leadgen_env_file }}"
+        regexp: "^LEADGEN_INTAKE_API_KEY="
+        line: "LEADGEN_INTAKE_API_KEY={{ vault_leadgen_intake_api_key }}"
+        create: true
+      no_log: true
+
+    - name: "Set LeadGen admin API key"
+      ansible.builtin.lineinfile:
+        path: "{{ leadgen_env_file }}"
+        regexp: "^LEADGEN_ADMIN_API_KEY="
+        line: "LEADGEN_ADMIN_API_KEY={{ vault_leadgen_admin_api_key }}"
+        create: true
+      no_log: true
+
+    - name: "Set LeadGen canonical API key (used by API middleware)"
+      ansible.builtin.lineinfile:
+        path: "{{ leadgen_env_file }}"
+        regexp: "^LEADGEN_API_KEY="
+        line: "LEADGEN_API_KEY={{ (vault_leadgen_api_key | default(vault_leadgen_intake_api_key)) }}"
+        create: true
+      no_log: true
+
+    - name: "Restart LeadGen API service"
+      ansible.builtin.systemd:
+        name: "{{ leadgen_service_name }}.service"
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
+    - name: "Verify | service is active"
+      ansible.builtin.command: "systemctl is-active {{ leadgen_service_name }}.service"
+      register: active
+      changed_when: false
+      failed_when: active.stdout.strip() != "active"
+
+    - name: "Verify | container sees env var NAMES (values redacted)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        /usr/local/bin/podman exec {{ leadgen_service_name }} sh -lc 'env | egrep -i "^(LEADGEN_(INTAKE|ADMIN)_API_KEY|LEADGEN_API_KEY)=" | sed "s/=.*$/=SET/"'
+      args:
+        executable: /bin/bash
+      register: env_names
+      changed_when: false
+      no_log: true
+
+  post_tasks:
+    - name: "Report (names only)"
+      ansible.builtin.debug:
+        msg:
+          - "LeadGen API service restarted: {{ leadgen_service_name }}"
+          - "Env file: {{ leadgen_env_file }}"
+          - "Container env vars verified (names only)."
+        verbosity: 0

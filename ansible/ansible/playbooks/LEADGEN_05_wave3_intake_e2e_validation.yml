@@ -1,0 +1,136 @@
+---
+# LEADGEN_05 — Wave 3 intake E2E validation (health + intake POST)
+# Purpose:
+#   - Validate the LeadGen API is healthy on localhost (nginx proxies externally)
+#   - POST /lead/intake using the CURRENT nested schema (contact + request)
+#   - Fail with SAFE diagnostics (no secrets, no response bodies with sensitive headers)
+
+- name: "LEADGEN_05 — Wave 3 intake E2E validation (health + intake POST)"
+  hosts: motorcade
+  become: true
+  gather_facts: false
+
+  vars:
+    leadgen_base_url: "http://127.0.0.1:8000"
+    leadgen_health_path: "/lead/health"
+    leadgen_intake_path: "/lead/intake"
+    leadgen_request_api_key: "{{ vault_leadgen_api_key | default(vault_leadgen_intake_api_key) }}"
+
+    # We accept 200/201 for success. We also accept known failure codes so we can print safe diagnostics.
+    leadgen_accept_status: [200, 201, 400, 401, 403, 404, 409, 422, 429, 500, 502, 503]
+
+  tasks:
+    - name: "Preflight | required vault key non-empty (intake)"
+      ansible.builtin.assert:
+        that:
+          - (leadgen_request_api_key | default("") | trim) | length > 0
+        fail_msg: "vault_leadgen_intake_api_key is empty. Set it in ansible/vault.yml and rerun with --ask-vault-pass"
+
+    - name: "Health | GET /lead/health (local)"
+      ansible.builtin.uri:
+        url: "{{ leadgen_base_url }}{{ leadgen_health_path }}"
+        method: GET
+        return_content: true
+        status_code: 200
+      register: leadgen_health
+
+    - name: "Validate | health JSON status ok"
+      ansible.builtin.assert:
+        that:
+          - leadgen_health.json is mapping
+          - (leadgen_health.json.status | default('')) == 'ok'
+        fail_msg: "Health check failed or returned unexpected JSON. Got: {{ leadgen_health.content | default('') | truncate(200) }}"
+
+    - name: "Generate | idempotency key"
+      ansible.builtin.set_fact:
+        leadgen_idempotency_key: "{{ lookup('pipe', 'uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid') | trim }}"
+
+    - name: "Generate | lead intake payload v2 (nested schema)"
+      ansible.builtin.set_fact:
+        leadgen_payload_v2:
+          contact:
+            full_name: "E2E Test"
+            email: "e2e@example.com"
+            phone: "+15551234567"
+          request:
+            # NOTE: service_type MUST match the API enum. Adjust if your API uses a different list.
+            service_type: "armed_security"
+            timeline:
+              mode: "flexible"
+              # Use UTC timestamp string; API may treat it as local label depending on implementation.
+              start_local: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+            location:
+              city: "Houston"
+              state: "TX"
+            service_state: "TX"
+            service_city: "Houston"
+            requested_start_utc: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+            notes: "Wave3 E2E test (nested schema)"
+
+    - name: "Intake | POST /lead/intake (nested schema)"
+      block:
+        - name: "Intake | POST /lead/intake (nested schema) | request"
+          ansible.builtin.uri:
+            url: "{{ leadgen_base_url }}{{ leadgen_intake_path }}"
+            method: POST
+            headers:
+              Content-Type: "application/json"
+              X-API-Key: "{{ leadgen_request_api_key }}"
+              Idempotency-Key: "{{ leadgen_idempotency_key }}"
+            body_format: json
+            body: "{{ leadgen_payload_v2 }}"
+            return_content: true
+            status_code: "{{ leadgen_accept_status }}"
+          register: leadgen_intake_post
+          retries: 3
+          delay: 1
+          until: leadgen_intake_post is succeeded
+          no_log: true
+      rescue:
+        - name: "Derive | intake transport error (SAFE)"
+          ansible.builtin.set_fact:
+            leadgen_intake_status: "transport_error"
+            leadgen_intake_error_code: ""
+            leadgen_intake_error_message: "{{ ansible_failed_result.msg | default('unknown error') }}"
+          no_log: true
+
+        - name: "Fail | intake transport error"
+          ansible.builtin.fail:
+            msg: "Lead intake POST failed before receiving an HTTP response. Re-run with -vv for more context, or check service logs: journalctl -u motorcade-leadgen-api.service -n 80 --no-pager"
+
+    - name: "Derive | safe intake diagnostics"
+      ansible.builtin.set_fact:
+        leadgen_intake_status: "{{ leadgen_intake_post.status | default('unknown') }}"
+        leadgen_intake_error_code: >-
+          {{
+            (leadgen_intake_post.json.detail.error.code
+              | default(leadgen_intake_post.json.error.code
+              | default('')))
+              if (leadgen_intake_post.json is mapping) else ''
+          }}
+        leadgen_intake_error_message: >-
+          {{
+            (leadgen_intake_post.json.detail.error.message
+              | default(leadgen_intake_post.json.error.message
+              | default(leadgen_intake_post.json.detail
+              | default(leadgen_intake_post.json.error
+              | default('')))))
+              if (leadgen_intake_post.json is mapping) else ''
+          }}
+
+    - name: "Debug | intake result (SAFE, requires -v)"
+      ansible.builtin.debug:
+        msg:
+          - "POST {{ leadgen_intake_path }} status={{ leadgen_intake_status }}"
+          - "Idempotency-Key used: {{ leadgen_idempotency_key }}"
+          - "Error code (if any): {{ leadgen_intake_error_code | default('') }}"
+          - "Error message (if any): {{ leadgen_intake_error_message | default('') | string | truncate(220) }}"
+        verbosity: 1
+
+    - name: "Assert | intake status 200/201"
+      ansible.builtin.assert:
+        that:
+          - leadgen_intake_status | int in [200, 201]
+        fail_msg: >-
+          Intake failed. status={{ leadgen_intake_status }} code={{ leadgen_intake_error_code | default('') }}
+          msg={{ leadgen_intake_error_message | default('') | string | truncate(220) }}

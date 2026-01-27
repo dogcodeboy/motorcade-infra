@@ -1,0 +1,118 @@
+---
+- name: "LEADGEN_05 — Wave 3 intake E2E validation (health + intake POST)"
+  hosts: motorcade-web-01
+  become: true
+  gather_facts: false
+
+  vars:
+    leadgen_base_url: "http://127.0.0.1:8000"
+    leadgen_health_path: "/lead/health"
+    leadgen_intake_path: "/lead/intake"
+    leadgen_accept_status:
+      - 200
+      - 201
+      - 202
+
+  tasks:
+    - name: "Preflight | required vault key non-empty (canonical preferred)"
+      ansible.builtin.assert:
+        that:
+          - "(vault_leadgen_api_key | default('')) | length > 0 or (vault_leadgen_intake_api_key | default('')) | length > 0"
+        fail_msg: "Missing vault_leadgen_api_key (preferred) or vault_leadgen_intake_api_key in vault.yml"
+
+    - name: "Set | e2e api key (canonical preferred)"
+      ansible.builtin.set_fact:
+        leadgen_e2e_api_key: "{{ vault_leadgen_api_key | default(vault_leadgen_intake_api_key) }}"
+
+    - name: "Health | wait for /lead/health (local)"
+      ansible.builtin.uri:
+        url: "{{ leadgen_base_url }}{{ leadgen_health_path }}"
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: 10
+      register: leadgen_health
+      retries: 12
+      delay: 2
+      until: leadgen_health.status == 200
+
+    - name: "Validate | health JSON status ok"
+      ansible.builtin.assert:
+        that:
+          - leadgen_health.json.status is defined
+          - leadgen_health.json.status == 'ok'
+        fail_msg: "Health JSON did not report status=ok"
+
+    - name: "Generate | idempotency key"
+      ansible.builtin.set_fact:
+        leadgen_idempotency_key: "{{ lookup('pipe', 'uuidgen') }}"
+
+    - name: "Generate | lead intake payload v2 (nested schema)"
+      ansible.builtin.set_fact:
+        leadgen_payload_v2:
+          contact:
+            full_name: "E2E Test"
+            email: "e2e@example.com"
+            phone: "+15551234567"
+          request:
+            service_type: "armed_security"
+            timeline:
+              mode: "flexible"
+              start_local: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+            location:
+              city: "Houston"
+              state: "TX"
+            service_state: "TX"
+            service_city: "Houston"
+            requested_start_utc: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+            notes: "Wave3 E2E test (nested schema)"
+
+    - name: "Intake | POST /lead/intake (nested schema)"
+      ansible.builtin.uri:
+        url: "{{ leadgen_base_url }}{{ leadgen_intake_path }}"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+          X-API-Key: "{{ leadgen_e2e_api_key }}"
+          Idempotency-Key: "{{ leadgen_idempotency_key }}"
+        body_format: json
+        body: "{{ leadgen_payload_v2 }}"
+        return_content: true
+        status_code:
+          - 200
+          - 201
+          - 202
+          - 400
+          - 401
+          - 403
+          - 409
+          - 422
+          - 500
+          - 503
+        timeout: 15
+      register: leadgen_intake_post
+      retries: 3
+      delay: 2
+      no_log: true
+
+    - name: "Derive | intake status + safe snippet"
+      ansible.builtin.set_fact:
+        leadgen_intake_status: "{{ leadgen_intake_post.status | default('unknown') }}"
+        leadgen_intake_snippet: >-
+          {{
+            (leadgen_intake_post.content | default('') | string)[:300]
+          }}
+
+    - name: "Debug | intake result (SAFE, requires -v)"
+      ansible.builtin.debug:
+        msg:
+          - "POST {{ leadgen_intake_path }} status={{ leadgen_intake_status }}"
+          - "Idempotency-Key used: {{ leadgen_idempotency_key }}"
+          - "Body snippet (first 300 chars): {{ leadgen_intake_snippet }}"
+        verbosity: 1
+
+    - name: "Validate | intake returned success status"
+      ansible.builtin.assert:
+        that:
+          - (leadgen_intake_status | int) in leadgen_accept_status
+        fail_msg: "Lead intake POST failed. status={{ leadgen_intake_status }} snippet={{ leadgen_intake_snippet }}"
