@@ -1,0 +1,14 @@
+SESSION HANDOFF — motorcade-infra
+
+Checkpoint: PLAT_08A (Planning)
+Status: Complete
+
+Summary:
+- Canonical container services standard defined
+- Podman runtime treated as externally managed
+- No dnf/rpm assumptions
+- systemd-first container lifecycle
+- Nginx freeze respected
+
+Next Steps:
+- Proceed with PLAT_08B (Redis / queue foundation)

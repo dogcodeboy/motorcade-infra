@@ -1,0 +1,17 @@
+SESSION HANDOFF — motorcade-infra — 2026-01-25
+
+Status:
+- PLAT_08D ran successfully on host `motorcade-web-01`.
+- Redis now has bounded + self-healing healthcheck with systemd timer enabled.
+- Output verified: Redis responds PONG; timer active.
+
+Repo updates included in this checkpoint:
+- RUNBOOK updated (minimal edits): platform progress updated; PLAT_08C/08D marked complete; next subsystem preserved.
+- New docs/RESOURCES.md added with:
+  - host naming rule (`motorcade-web-01` only)
+  - redis healthcheck unit names and log commands
+  - podman locked-path note (/usr/local/bin/podman)
+
+Next step:
+- Continue from the next PLAT_* item already listed under “Next Subsystem (Non-nginx)” in RUNBOOK.
+- Do NOT reopen nginx items.

@@ -1,0 +1,8 @@
+# Example verification commands for PLAT_06
+
+sudo nginx -t
+# expected: successful (warnings may remain, but no "conflicting server name ... :80" for motorcade.vip)
+
+curl -I http://motorcade.vip/
+# expected: HTTP/1.1 301 Moved Permanently
+# location: https://motorcade.vip/

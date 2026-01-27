@@ -1,0 +1,217 @@
+---
+- name: "PLAT_05 | HTTPS-only Nginx reverse proxy for LeadGen API (motorcade.vip)"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    nginx_conf_path: "/etc/nginx/conf.d/motorcade-ssl.conf"
+    nginx_backup_dir: "/etc/nginx/backup"
+    nginx_snippets_dir: "/etc/nginx/snippets"
+    leadgen_snippet_path: "/etc/nginx/snippets/motorcade-leadgen-api.conf"
+    legacy_leadgen_snippet_paths:
+      - "/etc/nginx/snippets/leadgen_api.conf"
+      - "/etc/nginx/snippets/leadgen.conf"
+    leadgen_upstream: "http://127.0.0.1:8000"
+
+  tasks:
+    - name: "Preflight | Ensure nginx is installed"
+      ansible.builtin.command: nginx -v
+      register: nginx_v
+      changed_when: false
+
+    - name: "Preflight | Ensure backup and snippets dirs exist"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ nginx_backup_dir }}"
+        - "{{ nginx_snippets_dir }}"
+
+    - name: "Step 1 | Backup motorcade-ssl.conf (timestamped)"
+      ansible.builtin.copy:
+        src: "{{ nginx_conf_path }}"
+        dest: "{{ nginx_backup_dir }}/motorcade-ssl.conf.{{ lookup('pipe','date +%Y%m%d-%H%M%S') }}"
+        remote_src: true
+      when: nginx_conf_path is file
+
+    - name: "Step 1B | Fail if motorcade-ssl.conf does not exist"
+      ansible.builtin.stat:
+        path: "{{ nginx_conf_path }}"
+      register: ssl_stat
+
+    - name: "Step 1C | Abort if motorcade-ssl.conf missing"
+      ansible.builtin.fail:
+        msg: "Expected {{ nginx_conf_path }} to exist but it was not found."
+      when: not ssl_stat.stat.exists
+
+    - name: "Step 2 | Remove ANY LeadGen proxy blocks from motorcade-ssl.conf (marker-based)"
+      ansible.builtin.replace:
+        path: "{{ nginx_conf_path }}"
+        # Matches both historical styles:
+        #  - "# BEGIN MOTORCADE_LEADGEN_PROXY" (underscores)
+        #  - "# BEGIN MOTORCADE LEADGEN PROXY" (spaces) + optional suffix
+        regexp: "(?s)^[ \t]*# BEGIN MOTORCADE[ _]LEADGEN[ _]PROXY.*?^[ \t]*# END MOTORCADE[ _]LEADGEN[ _]PROXY[^\n]*\n"
+        replace: ""
+
+    - name: "Step 2B | Remove any previously inserted LeadGen SSL blocks (marker-based) from motorcade-ssl.conf"
+      ansible.builtin.replace:
+        path: "{{ nginx_conf_path }}"
+        regexp: "(?s)^[ \t]*# BEGIN MOTORCADE_LEADGEN_PROXY_SSL.*?^[ \t]*# END MOTORCADE_LEADGEN_PROXY_SSL[^\n]*\n"
+        replace: ""
+
+    - name: "Step 2C | Remove ANY existing LeadGen snippet include lines from motorcade-ssl.conf (we will re-add only one canonical include to SSL vhost)"
+      ansible.builtin.replace:
+        path: "{{ nginx_conf_path }}"
+        regexp: "^[ \t]*include[ \t]+/etc/nginx/snippets/(motorcade-leadgen-api|leadgen_api|leadgen)\\.conf;[ \t]*\n"
+        replace: ""
+
+    - name: "Step 2D | Quarantine any legacy LeadGen snippet files so nginx can't parse duplicate location blocks"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        ts="$(date +%Y%m%d-%H%M%S)"
+        for f in {{ legacy_leadgen_snippet_paths | map('quote') | join(' ') }}; do
+          if [ -f "$f" ]; then
+            b="{{ nginx_backup_dir }}/$(basename "$f").$ts"
+            mv -f "$f" "$b"
+            echo "MOVED $f -> $b"
+          fi
+        done
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: "Step 3 | Write LeadGen nginx snippet (HTTPS-only proxy locations)"
+      ansible.builtin.copy:
+        dest: "{{ leadgen_snippet_path }}"
+        mode: "0644"
+        content: |
+          # Managed by Ansible (PLAT_05) — LeadGen Intake API reverse proxy
+          #
+          # IMPORTANT:
+          # - This file must only be included inside the SSL (listen 443) server{}.
+          # - Do NOT include it inside any HTTP :80 server{} (HTTPS-only rule).
+
+          # Exact health check endpoint
+          location = /api/lead/health {
+            proxy_pass {{ leadgen_upstream }}/lead/health;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 5s;
+            proxy_send_timeout 30s;
+            proxy_read_timeout 30s;
+          }
+
+          # All other LeadGen routes
+          location ^~ /api/lead/ {
+            proxy_pass {{ leadgen_upstream }}/;
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+            proxy_connect_timeout 5s;
+            proxy_send_timeout 30s;
+            proxy_read_timeout 30s;
+          }
+
+    - name: "Step 4 | Ensure LeadGen snippet include is inside the SSL server{} for motorcade.vip (no blockinfile firstmatch)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        from __future__ import annotations
+        from pathlib import Path
+        import re
+        p = Path("{{ nginx_conf_path }}")
+        s = p.read_text(errors="ignore").splitlines(True)
+
+        include_line = "    include /etc/nginx/snippets/motorcade-leadgen-api.conf;\n"
+
+        # Remove any previously injected include lines anywhere (we will re-insert in the correct SSL server block).
+        s = [ln for ln in s if ln.strip() != "include /etc/nginx/snippets/motorcade-leadgen-api.conf;"]
+
+        out = []
+        in_server = False
+        depth = 0
+        server_buf = []
+        server_depth0 = None
+
+        def flush_server(buf: list[str]) -> list[str]:
+            text = "".join(buf)
+            is_ssl = bool(re.search(r"^\s*listen\s+443\b.*\bssl\b", text, re.M))
+            has_name = bool(re.search(r"^\s*server_name\s+[^;]*\bmotorcade\.vip\b", text, re.M))
+            if not (is_ssl and has_name):
+                return buf
+
+            # Insert include immediately after the first server_name line in this server block.
+            new_buf = []
+            inserted = False
+            for ln in buf:
+                new_buf.append(ln)
+                if (not inserted) and re.match(r"^\s*server_name\s+.*\bmotorcade\.vip\b.*;\s*$", ln):
+                    # Ensure we only insert once.
+                    new_buf.append(include_line)
+                    inserted = True
+            if not inserted:
+                # Fallback: insert right after 'server {'
+                newer = []
+                for ln in buf:
+                    newer.append(ln)
+                    if (not inserted) and re.match(r"^\s*server\s*\{\s*$", ln):
+                        newer.append(include_line)
+                        inserted = True
+                new_buf = newer
+            return new_buf
+
+        for ln in s:
+            # Track brace depth (good enough for nginx conf formatting)
+            opens = ln.count("{")
+            closes = ln.count("}")
+
+            if not in_server:
+                if re.match(r"^\s*server\s*\{\s*$", ln):
+                    in_server = True
+                    server_depth0 = depth
+                    server_buf = [ln]
+                else:
+                    out.append(ln)
+            else:
+                server_buf.append(ln)
+
+            depth += opens - closes
+
+            if in_server and server_depth0 is not None and depth == server_depth0:
+                # server block ended
+                out.extend(flush_server(server_buf))
+                in_server = False
+                server_buf = []
+                server_depth0 = None
+
+        if in_server and server_buf:
+            # EOF inside server; still flush
+            out.extend(flush_server(server_buf))
+
+        new_text = "".join(out)
+        if include_line.strip() not in new_text:
+            raise SystemExit("ERROR: Failed to inject LeadGen include line into SSL server block")
+        p.write_text(new_text)
+        print(f"OK: injected include into {p}")
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: "Step 5 | Validate nginx configuration"
+      ansible.builtin.command: nginx -t
+      register: nginx_test
+      changed_when: false
+
+    - name: "Step 6 | Reload nginx (only if config is valid)"
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded
+      when: nginx_test.rc == 0

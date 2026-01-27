@@ -1,0 +1,3 @@
+SESSION HANDOFF — motorcade-infra
+
+Deprecated cleanup applied. See docs/reports/PURGE_CANDIDATES.md.

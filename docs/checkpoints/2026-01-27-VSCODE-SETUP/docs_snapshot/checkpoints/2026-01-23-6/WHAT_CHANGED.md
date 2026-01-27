@@ -1,0 +1,3 @@
+- Updated motorcade-infra/docs/RUNBOOK.md to reflect current platform reality
+- nginx marked FINAL and frozen
+- Next execution point set to PLAT_07

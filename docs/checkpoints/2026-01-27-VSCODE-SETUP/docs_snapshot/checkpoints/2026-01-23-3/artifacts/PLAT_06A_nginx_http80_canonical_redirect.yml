@@ -1,0 +1,163 @@
+---
+- name: "PLAT_06A | Canonicalize HTTP:80 vhost for motorcade.vip (single redirect) — robust scrubber"
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    nginx_conf_dir: "/etc/nginx/conf.d"
+    nginx_backup_dir: "/etc/nginx/backup"
+    canonical_http_redirect_conf: "/etc/nginx/conf.d/motorcade-redirect.conf"
+    canonical_server_names:
+      - "motorcade.vip"
+      - "www.motorcade.vip"
+
+  tasks:
+    - name: "Step 0 | Ensure backup dir exists"
+      ansible.builtin.file:
+        path: "{{ nginx_backup_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: "Step 1 | Write canonical HTTP:80 redirect vhost (single source of truth)"
+      ansible.builtin.copy:
+        dest: "{{ canonical_http_redirect_conf }}"
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          # Canonical HTTP:80 redirect (managed by Ansible PLAT_06A)
+          server {
+            listen 80;
+            server_name motorcade.vip www.motorcade.vip;
+
+            # Force HTTPS
+            return 301 https://$host$request_uri;
+          }
+
+    - name: "Step 2 | Write scrubber script to remove duplicate server blocks (HTTP:80 motorcade.vip) in conf.d"
+      ansible.builtin.copy:
+        dest: "/tmp/plat06a_scrub_http80_duplicates.py"
+        mode: "0755"
+        owner: root
+        group: root
+        content: |
+          #!/usr/bin/env python3
+          from __future__ import annotations
+
+          import re
+          import shutil
+          from pathlib import Path
+          from datetime import datetime
+          import json
+          import sys
+
+          CONF_DIR = Path({{ nginx_conf_dir | to_json }})
+          BACKUP_DIR = Path({{ nginx_backup_dir | to_json }})
+          CANONICAL = Path({{ canonical_http_redirect_conf | to_json }})
+          CANONICAL_NAMES = set(json.loads({{ canonical_server_names | to_json | to_json }}))
+
+          TS = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+          def server_blocks(text: str) -> list[tuple[int, int, str]]:
+              """Return list of (start_idx, end_idx, block_text) for top-level server { ... } blocks."""
+              blocks = []
+              for m in re.finditer(r"(?m)^\s*server\s*\{", text):
+                  start = m.start()
+                  i = m.end()
+                  depth = 1
+                  while i < len(text) and depth > 0:
+                      ch = text[i]
+                      if ch == "{":
+                          depth += 1
+                      elif ch == "}":
+                          depth -= 1
+                      i += 1
+                  end = i
+                  blocks.append((start, end, text[start:end]))
+              return blocks
+
+          def is_http80_motorcade(block: str) -> bool:
+              if not re.search(r"(?m)^\s*listen\s+80\b", block):
+                  return False
+              m = re.search(r"(?m)^\s*server_name\s+([^;]+);", block)
+              if not m:
+                  return False
+              names = {n.strip() for n in m.group(1).split() if n.strip()}
+              return any(n in names for n in CANONICAL_NAMES)
+
+          def only_comments_or_whitespace(text: str) -> bool:
+              for ln in text.splitlines():
+                  s = ln.strip()
+                  if not s:
+                      continue
+                  if s.startswith("#"):
+                      continue
+                  return False
+              return True
+
+          def main() -> int:
+              if not CONF_DIR.exists():
+                  print(f"CONF_DIR does not exist: {CONF_DIR}", file=sys.stderr)
+                  return 2
+
+              BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+
+              for p in sorted(CONF_DIR.glob("*.conf")):
+                  # Never touch the canonical redirect file
+                  try:
+                      if p.resolve() == CANONICAL.resolve():
+                          continue
+                  except Exception:
+                      pass
+
+                  raw = p.read_text(errors="ignore")
+                  blocks = server_blocks(raw)
+                  if not blocks:
+                      continue
+
+                  bad = [(a, b, blk) for (a, b, blk) in blocks if is_http80_motorcade(blk)]
+                  if not bad:
+                      continue
+
+                  backup_path = BACKUP_DIR / f"{p.name}.{TS}"
+                  shutil.copy2(p, backup_path)
+
+                  out = []
+                  last = 0
+                  for (a, b, _blk) in sorted(bad, key=lambda t: t[0]):
+                      out.append(raw[last:a])
+                      last = b
+                  out.append(raw[last:])
+                  new_text = "".join(out)
+
+                  if only_comments_or_whitespace(new_text):
+                      quarantined = BACKUP_DIR / f"{p.name}.{TS}.disabled"
+                      shutil.move(str(p), str(quarantined))
+                      print(f"QUARANTINED {p} -> {quarantined}")
+                  else:
+                      p.write_text(new_text)
+                      print(f"SCRUBBED {p} (removed {len(bad)} duplicate server block(s)); backup: {backup_path}")
+
+              return 0
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
+
+    - name: "Step 3 | Run scrubber (quarantine/scrub duplicates)"
+      ansible.builtin.command: "python3 /tmp/plat06a_scrub_http80_duplicates.py"
+      register: scrubber_run
+
+    - name: "Step 3A | Show scrubber output"
+      ansible.builtin.debug:
+        var: scrubber_run.stdout_lines
+
+    - name: "Step 4 | Validate nginx configuration"
+      ansible.builtin.command: "nginx -t"
+      register: nginx_test
+      changed_when: false
+
+    - name: "Step 5 | Reload nginx (only if config is valid)"
+      ansible.builtin.service:
+        name: nginx
+        state: reloaded

@@ -246,11 +246,8 @@ PLAT_19 — Governance Activation
    - Applies migration: `20260126_02_wave1_write_path` (adds `intake_id`, `request_id`, `idempotency_key`)
    - Enables real intake: `POST https://motorcade.vip/api/lead/intake`
    - Verifies:
-     - **Auth + schema validation** passes (returns 2xx with `intake_id`)
-     - **Idempotency-Key** is enforced (duplicate key does not create a second acceptance)
-     - **Persistence behavior depends on queue mode**:
-       - If `queue=stub`, requests may be accepted without DB writes (for early bring-up)
-       - If `queue=redis/worker`, the worker persists to `app.leads`
+     - Insert into `app.leads` succeeds
+     - Duplicate `Idempotency-Key` does not create a second row
 
 
 ---
@@ -306,39 +303,3 @@ motorcade-web-01 : ok=11 changed=0 failed=0
 `docs/checkpoints/2026-01-26-PLAT-LEADGEN_03-Write-Path-Hardening-Clean-Rebuild/`
 
 Next: **Proceed to LeadGen Wave 2**
-
----
-
-## LeadGen (leadgen.motorcade.vip) — Wave 2/3 progress (2026-01-27)
-
-Status verified on `motorcade-web-01`:
-- `motorcade-leadgen-api` service is running and healthy (`GET /lead/health` returns `status=ok`).
-- `/lead/intake` is protected by `X-API-Key`.
-- v1 validation gate is **Texas-only** (non-TX `request.location.state` is rejected).
-
-Playbooks executed
-- `LEADGEN_04_wave2_runtime_hardening.yml` (runtime hardening)
-- `LEADGEN_05_wave3_intake_e2e_validation.yml` (intake E2E validation)
-- `LEADGEN_06_configure_api_keys.yml` (configure server-side API keys + restart)
-
-API key names (runtime)
-- `/etc/motorcade/leadgen.env` contains these **names** (values must never be committed or pasted):
-  - `LEADGEN_API_KEY` (canonical key used by middleware for `X-API-Key`)
-  - `LEADGEN_ADMIN_API_KEY`
-  - `LEADGEN_INTAKE_API_KEY`
-
-Safe inspection (names only; no secrets)
-```bash
-sudo bash -lc '
-  set -a
-  source /etc/motorcade/leadgen.env
-  set +a
-  env | egrep -E "^LEADGEN_.*KEY" | sort | sed "s/=.*$/=<redacted>/"
-'
-```
-
-Checkpoint
-- See: `docs/checkpoints/2026-01-27-LEADGEN_06-Auth-Key-Names-TX-Gate/`
-
-Next
-- Confirm intended persistence behavior for v1 (`queue=stub`): whether `/lead/intake` should write directly to Postgres or enqueue + worker.
