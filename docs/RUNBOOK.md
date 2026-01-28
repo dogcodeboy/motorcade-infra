@@ -246,7 +246,8 @@ PLAT_19 — Governance Activation
 4. **LEADGEN_07B — Psycopg JSONB persistence + Wave 3 schema E2E verify (Authoritative PASS)**
    - Playbook: `ansible/playbooks/LEADGEN_07B_wave3_psycopg_driver_fix_and_persistence_verify.yml`
    - Verified: **2026-01-28**
-   - Deploy ref (LeadGen app): `44a9d47` (branch: `sync/server-leadgen-fixes-2026-01-27`)
+   - Deploy ref (LeadGen app): tag `leadgen-wave1-2026-01-28b` (SHA: `94da1cdbfb22fb731a51944cc01a12f23e1740b7`)
+   - Implementation branch used during fix: `sync/server-leadgen-fixes-2026-01-27` (intermediate commit: `44a9d47`)
    - What was fixed (app-level, in `motorcade-leadgen`):
      - Persisting request payload now uses psycopg3 JSON adapters (e.g., `Jsonb(...)`) so Postgres `jsonb` writes are deterministic (no “cannot adapt type 'dict'”).
    - What was fixed (infra/test contract, in `motorcade-infra`):
@@ -258,9 +259,10 @@ PLAT_19 — Governance Activation
      - Postgres durability check succeeds: `app.leads` row count increases; newest timestamp updates.
 
    - **Pinning rule (production stability):**
-     - The playbook defaults `leadgen_git_ref: origin/main`. For deterministic deployments, run with:
-       - `-e leadgen_git_ref=44a9d47` (or a release tag once introduced).
-
+     - The playbook now defaults to a pinned release tag for deterministic deployments:
+       - `leadgen_git_ref: leadgen-wave1-2026-01-28b` (SHA: `94da1cdbfb22fb731a51944cc01a12f23e1740b7`)
+     - Override is allowed **only** for controlled roll-forward / rollback testing:
+       - `-e leadgen_git_ref=<release-tag-or-sha>`
 
 ### Notes
 
