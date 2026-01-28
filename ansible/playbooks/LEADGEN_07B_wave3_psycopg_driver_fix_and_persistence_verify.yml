@@ -7,6 +7,10 @@
   vars:
     podman_bin: /usr/local/bin/podman
 
+    # Service area allowlist (Phase 1: config knob; Phase 2: admin console will manage this)
+    # Override via inventory/group_vars or -e leadgen_service_area_states='["TX","OK"]'
+    leadgen_service_area_states: ["TX"]
+
     # Authoritative LeadGen working tree on target
     leadgen_repo_dir: /opt/motorcade-leadgen
 
@@ -155,38 +159,39 @@
         e2e_idem: "e2e_{{ ansible_date_time.epoch }}"
         e2e_email: "e2e-{{ ansible_date_time.epoch }}@example.com"
 
-    # FIX: payload must satisfy current OpenAPI schema (LeadIntakeRequest: contact+request; request requires service_type+timeline+location)
-- name: Generate | lead intake payload (OpenAPI schema-valid; TX-only)
-  set_fact:
-    lead_payload:
-      contact:
-        full_name: "E2E Test"
-        email: "{{ e2e_email }}"
-        phone: "+12125550123"
-        preferred_contact_method: "email"
-      request:
-        service_type: "armed_escort_driver"
-        timeline:
-          start_local: "2026-02-01 09:00"
-          end_local: "2026-02-01 19:00"
-        location:
-          street: "123 Demo St"
-          city: "Houston"
-          state: "TX"
-          postal_code: "77002"
-        site_type: "commercial"
-        notes: "E2E payload - schema-valid"
-        recurrence: "one_time"
-        expected_hours: 10
-      context:
-        lead_source: "ansible-e2e"
-        referrer_url: "local://ansible"
-        utm:
-          source: "ansible"
-          medium: "e2e"
-          campaign: "leadgen_07b"
 
-- name: Set | intake api key (from env file)
+    # FIX: payload must satisfy current OpenAPI schema (LeadIntakeRequest: contact+request; request requires service_type+timeline+location)
+    - name: Generate | lead intake payload (OpenAPI schema-valid; service-area configurable)
+      set_fact:
+        lead_payload:
+          contact:
+            full_name: "E2E Test"
+            email: "{{ e2e_email }}"
+            phone: "+12125550123"
+            preferred_contact_method: "email"
+          request:
+            service_type: "armed_escort_driver"
+            timeline:
+              start_local: "2026-02-01 09:00"
+              end_local: "2026-02-01 19:00"
+            location:
+              street: "123 Demo St"
+              city: "Houston"
+              state: "{{ (leadgen_service_area_states | default(['TX']))[0] }}"
+              postal_code: "77002"
+            site_type: "commercial"
+            notes: "E2E payload - schema-valid"
+            recurrence: "one_time"
+            expected_hours: 10
+          context:
+            lead_source: "ansible-e2e"
+            referrer_url: "local://ansible"
+            utm:
+              source: "ansible"
+              medium: "e2e"
+              campaign: "leadgen_07b"
+
+    - name: Set | intake api key (from env file)
       shell: |
         set -euo pipefail
         set -a
