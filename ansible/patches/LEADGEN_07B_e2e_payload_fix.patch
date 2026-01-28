@@ -1,0 +1,43 @@
+--- a/ansible/playbooks/LEADGEN_07B_wave3_psycopg_driver_fix_and_persistence_verify.yml
++++ b/ansible/playbooks/LEADGEN_07B_wave3_psycopg_driver_fix_and_persistence_verify.yml
+@@ -253,19 +253,27 @@
+     - name: Generate | lead intake payload (Wave3 schema; TX-only)
+       set_fact:
+         lead_payload:
+-          schema: "wave3"
+-          market: "TX"
+-          contact:
+-            name: "E2E Test"
+-            email: "{{ e2e_email }}"
+-            phone: "+12125550123"
+-          service:
+-            type: "guard"
+-            hours: 10
+-            armed: true
+-          meta:
+-            source: "e2e"
+-            idempotency_key: "{{ e2e_key }}"
++schema: "wave3"
++market: "TX"
++contact:
++  full_name: "E2E Test"
++  name: "E2E Test"
++  email: "{{ e2e_email }}"
++  phone: "+12125550123"
++request:
++  service_type: "guard"
++  hours: 10
++  armed: true
++  location:
++    state: "TX"
++service:
++  type: "guard"
++  hours: 10
++  armed: true
++meta:
++  source: "e2e"
++  idempotency_key: "{{ e2e_key }}"
++
+ 
+     - name: Set | intake api key (from env file)
+       shell: "set -euo pipefail; . {{ leadgen_env_path }}; echo ${LEADGEN_INTAKE_API_KEY:-}"
