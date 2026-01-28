@@ -246,99 +246,26 @@ PLAT_19 — Governance Activation
    - Applies migration: `20260126_02_wave1_write_path` (adds `intake_id`, `request_id`, `idempotency_key`)
    - Enables real intake: `POST https://motorcade.vip/api/lead/intake`
    - Verifies:
-     - **Auth + schema validation** passes (returns 2xx with `intake_id`)
-     - **Idempotency-Key** is enforced (duplicate key does not create a second acceptance)
-     - **Persistence behavior depends on queue mode**:
-       - If `queue=stub`, requests may be accepted without DB writes (for early bring-up)
-       - If `queue=redis/worker`, the worker persists to `app.leads`
+     - Insert into `app.leads` succeeds
+     - Duplicate `Idempotency-Key` does not create a second row
 
+4. **LEADGEN_07B — Psycopg driver packaging + intake persistence contract confirmation (Wave 3 schema)**
+   - Playbook: `ansible/playbooks/LEADGEN_07B_wave3_psycopg_driver_fix_and_persistence_verify.yml`
+   - Status: **PARTIAL (verified build + intake accept). Persistence contract confirmed; queue gate removed.**
+   - What was fixed:
+     - Rebuild now runs cleanly under static Podman install (argv-safe build invocation).
+     - Corrected **Wave 3 intake payload schema** (fields: `contact.full_name`, `request.service_type`, `request.timeline`, `request.location`).
+     - Build context corrected so `COPY requirements.txt` resolves correctly.
+     - `psycopg[binary]` ensured in the LeadGen requirements (idempotent).
+   - What we observed (authoritative):
+     - `GET /lead/health` returns `queue=stub` currently.
+     - `POST /lead/intake` returns `202 Accepted` and logs `lead_intake_accepted`.
+     - Postgres schema includes `app.leads.payload jsonb` and idempotency unique index (partial).
+   - **Durability contract (LOCKED):**
+     - `POST /lead/intake` must be **durable to Postgres** before returning success (`200/201/202/409`).
+     - Queue/worker is **optional** and must never gate persistence verification.
+     - Redis may be used for rate-limit/cache/async enrichment later, but **writes are to Postgres**.
+   - Next:
+     - Create next playbook to **verify persistence by querying Postgres** for `idempotency_key` / `request_id` written by intake.
+     - If `queue=stub` is intentional, keep it; but enforce that accept == persisted.
 
----
-# 🔒 RUNBOOK APPEND — LEADGEN_03 (Wave 1 Write-Path Hardening)
-
-## Section: LeadGen Platform — Wave 1
-
-### LEADGEN_03 — Write-Path Hardening (Clean Rebuild)
-
-**Checkpoint ID**  
-`2026-01-26 — PLAT / LEADGEN_03 — Write-Path Hardening (Clean Rebuild)`
-
-**Status**  
-✅ **COMPLETE · VERIFIED · LOCKED**
-
-This step establishes the **first production-safe write path** for the LeadGen Wave 1 intake pipeline. It replaces all prior failed or drifted attempts and is the **authoritative baseline** for all subsequent LeadGen work.
-
-### Preconditions (Authoritative)
-- Single Ansible configuration file only at `motorcade-infra/ansible/ansible.cfg`
-- Inventory: `inventories/prod/hosts.ini`
-- Target host: `motorcade-web-01`
-- Vault: `ansible/group_vars/motorcade/vault.yml`
-- Vault execution: `--vault-id @prompt`
-
-### Vault Keys Required
-- `vault_leadgen_intake_api_key`
-- `vault_leadgen_admin_api_key`
-- `vault_postgres_password`
-
-### Playbook
-`ansible/playbooks/LEADGEN_03_wave1_write_path_hardening.yml`
-
-Execution recap:
-```
-PLAY RECAP
-motorcade-web-01 : ok=11 changed=0 failed=0
-```
-
-### Enforced Filesystem State
-- `/opt/motorcade` — 0750 root:root
-- `/opt/motorcade/leadgen` — 0750 root:root
-- `/opt/motorcade/leadgen/config` — 0750 root:root
-- `/opt/motorcade/leadgen/data` — 0750 root:root
-- `/opt/motorcade/leadgen/logs` — 0750 root:root
-- `/opt/motorcade/leadgen/tmp` — 1770 root:root (sticky)
-
-### Rules Going Forward
-- Do not introduce additional `ansible.cfg` files
-- Do not move `group_vars`
-- Do not modify LEADGEN_03 unless requirements change
-
-### Checkpoint Reference
-`docs/checkpoints/2026-01-26-PLAT-LEADGEN_03-Write-Path-Hardening-Clean-Rebuild/`
-
-Next: **Proceed to LeadGen Wave 2**
-
----
-
-## LeadGen (leadgen.motorcade.vip) — Wave 2/3 progress (2026-01-27)
-
-Status verified on `motorcade-web-01`:
-- `motorcade-leadgen-api` service is running and healthy (`GET /lead/health` returns `status=ok`).
-- `/lead/intake` is protected by `X-API-Key`.
-- v1 validation gate is **Texas-only** (non-TX `request.location.state` is rejected).
-
-Playbooks executed
-- `LEADGEN_04_wave2_runtime_hardening.yml` (runtime hardening)
-- `LEADGEN_05_wave3_intake_e2e_validation.yml` (intake E2E validation)
-- `LEADGEN_06_configure_api_keys.yml` (configure server-side API keys + restart)
-
-API key names (runtime)
-- `/etc/motorcade/leadgen.env` contains these **names** (values must never be committed or pasted):
-  - `LEADGEN_API_KEY` (canonical key used by middleware for `X-API-Key`)
-  - `LEADGEN_ADMIN_API_KEY`
-  - `LEADGEN_INTAKE_API_KEY`
-
-Safe inspection (names only; no secrets)
-```bash
-sudo bash -lc '
-  set -a
-  source /etc/motorcade/leadgen.env
-  set +a
-  env | egrep -E "^LEADGEN_.*KEY" | sort | sed "s/=.*$/=<redacted>/"
-'
-```
-
-Checkpoint
-- See: `docs/checkpoints/2026-01-27-LEADGEN_06-Auth-Key-Names-TX-Gate/`
-
-Next
-- Confirm intended persistence behavior for v1 (`queue=stub`): whether `/lead/intake` should write directly to Postgres or enqueue + worker.
