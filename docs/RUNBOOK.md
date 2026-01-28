@@ -45,6 +45,15 @@ This document is the **single source of truth** for build/deploy order across al
    - Status: Ansible YAML, Vault secrets, Postgres roles/schema VERIFIED
    - Proceed next to: `PLAT_04_lead_intake_api.yml`
 10. `PLAT_04_lead_intake_api.yml`
+#### LeadGen repository boundary (authoritative)
+
+- LeadGen application source lives in the separate repository: `motorcade-leadgen` (NOT `motorcade-infra`).
+- On production host `motorcade-web-01`, the LeadGen working tree is: `/opt/motorcade-leadgen`
+- Canonical app paths used for builds:
+  - `/opt/motorcade-leadgen/app/api/leadgen_api/main.py`
+  - `/opt/motorcade-leadgen/app/api/requirements.txt`
+- Infra playbooks must rebuild/redeploy the LeadGen image from the `motorcade-leadgen` build context; do **not** copy/patch app source files directly via Ansible.
+
 11. `PLAT_05_nginx_reverse_proxy_leadgen_api.yml`
    - **NGINX FROZEN** (verified). Do not modify unless OWNER-approved.
 12. `PLAT_06_people_api.yml`

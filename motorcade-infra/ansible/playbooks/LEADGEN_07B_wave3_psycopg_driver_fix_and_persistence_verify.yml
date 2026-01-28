@@ -1,0 +1,376 @@
+---
+- name: "LEADGEN_07B — Fix DB driver packaging + enforce LeadIntake persistence contract (Postgres)"
+  hosts: motorcade-web-01
+  become: true
+  gather_facts: true
+
+  vars:
+    # Non-standard Podman install path per Motorcade infra decisions
+    podman_bin: "/usr/local/bin/podman"
+
+    # Runtime assumptions (Wave 1 / Wave 2)
+    leadgen_service_name: "motorcade-leadgen-api.service"
+    leadgen_base_url: "http://127.0.0.1:8000"
+    leadgen_health_path: "/lead/health"
+    leadgen_intake_path: "/lead/intake"
+
+    # Candidate repo roots on the server (autodetect first existing)
+    leadgen_repo_root_candidates:
+      - "/opt/motorcade-leadgen/app"
+      - "/opt/motorcade-leadgen"
+      - "/opt/motorcade/leadgen"
+      - "/srv/motorcade/leadgen"
+
+    # Postgres container + DB (Wave 1 foundation)
+    pg_container_name: "motorcade-postgres"
+    pg_db: "motorcade"
+
+    # Polling parameters
+    persist_retries: 45
+    persist_delay: 2
+
+  tasks:
+    - name: "Preflight | podman present (non-standard install path)"
+      ansible.builtin.stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+
+    - name: "Assert | podman present"
+      ansible.builtin.assert:
+        that:
+          - podman_stat.stat.exists
+          - podman_stat.stat.isreg or podman_stat.stat.islnk
+        fail_msg: "Podman not found at {{ podman_bin }}. Check PLAT_01B / Podman static install."
+
+    - name: "Discover | LeadGen repo root (first existing candidate)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for p in {{ leadgen_repo_root_candidates | map('quote') | join(' ') }}; do
+          if [ -d "$p" ]; then
+            echo "$p"
+            exit 0
+          fi
+        done
+        exit 1
+      args:
+        executable: /bin/bash
+      register: leadgen_root_pick
+      changed_when: false
+
+    - name: "Set | leadgen_repo_root"
+      ansible.builtin.set_fact:
+        leadgen_repo_root: "{{ leadgen_root_pick.stdout | trim }}"
+
+    - name: "Assert | LeadGen repo root exists"
+      ansible.builtin.assert:
+        that:
+          - leadgen_repo_root is string
+          - (leadgen_repo_root | length) > 0
+        fail_msg: "Could not autodetect LeadGen repo root from candidates: {{ leadgen_repo_root_candidates }}"
+
+    - name: "Show | leadgen_repo_root"
+      ansible.builtin.debug:
+        msg: "leadgen_repo_root={{ leadgen_repo_root }}"
+
+    - name: "Discover | requirements.txt under LeadGen repo root"
+      ansible.builtin.find:
+        paths: "{{ leadgen_repo_root }}"
+        patterns: "requirements.txt"
+        recurse: true
+        file_type: file
+      register: req_find
+
+    - name: "Assert | requirements.txt found"
+      ansible.builtin.assert:
+        that:
+          - (req_find.files | length) > 0
+        fail_msg: "No requirements.txt found under {{ leadgen_repo_root }}."
+
+    - name: "Set | requirements_path (prefer */api/requirements.txt if present)"
+      ansible.builtin.set_fact:
+        requirements_path: >-
+          {{
+            (
+              (req_find.files | map(attribute='path') | list)
+              | select('search', '/api/requirements.txt$')
+              | list
+              | first
+            )
+            | default((req_find.files | map(attribute='path') | list | first))
+          }}
+
+    - name: "Read | requirements.txt (remote)"
+      ansible.builtin.slurp:
+        src: "{{ requirements_path }}"
+      register: req_slurp
+
+    - name: "Parse | requirements content"
+      ansible.builtin.set_fact:
+        requirements_text: "{{ (req_slurp.content | b64decode) | string }}"
+
+    - name: "Check | Postgres driver present in requirements.txt?"
+      ansible.builtin.set_fact:
+        has_psycopg_binary: "{{ 'psycopg[binary]' in requirements_text }}"
+        has_psycopg_any: "{{ (requirements_text | regex_search('(?im)^psycopg')) is not none }}"
+        has_psycopg2_any: "{{ (requirements_text | regex_search('(?im)^psycopg2')) is not none }}"
+
+    - name: "Fix | add psycopg[binary] to requirements.txt when missing"
+      ansible.builtin.lineinfile:
+        path: "{{ requirements_path }}"
+        line: "psycopg[binary]"
+        create: false
+        insertafter: EOF
+      when: not (has_psycopg_binary or has_psycopg_any or has_psycopg2_any)
+
+    - name: "Discover | Containerfile/Dockerfile under LeadGen repo root"
+      ansible.builtin.find:
+        paths: "{{ leadgen_repo_root }}"
+        patterns:
+          - "Containerfile"
+          - "Dockerfile"
+        recurse: true
+        file_type: file
+      register: buildfile_find
+
+    - name: "Assert | build file found"
+      ansible.builtin.assert:
+        that:
+          - (buildfile_find.files | length) > 0
+        fail_msg: "No Containerfile/Dockerfile found under {{ leadgen_repo_root }}."
+
+    - name: "Choose | containerfile_path (prefer */api/Containerfile then */api/Dockerfile else first)"
+      ansible.builtin.set_fact:
+        containerfile_path: >-
+          {{
+            (
+              (buildfile_find.files | map(attribute='path') | list)
+              | select('search', '/api/Containerfile$')
+              | list
+              | first
+            )
+            | default(
+              (
+                (buildfile_find.files | map(attribute='path') | list)
+                | select('search', '/api/Dockerfile$')
+                | list
+                | first
+              )
+            )
+            | default((buildfile_find.files | map(attribute='path') | list | first))
+          }}
+
+    - name: "Set | build_context_dir"
+      ansible.builtin.set_fact:
+        build_context_dir: "{{ containerfile_path | dirname }}"
+
+    # --- Wave3 fix: ensure API writes directly to Postgres even if queue is still stub.
+    # We deploy a known-good main.py that:
+    #   - keeps queue='stub' in /lead/health
+    #   - still persists /lead/intake payload into Postgres
+    - name: "Discover | leadgen_api main.py under LeadGen repo root"
+      ansible.builtin.find:
+        paths: "{{ leadgen_repo_root }}"
+        patterns:
+          - "main.py"
+        recurse: true
+        file_type: file
+      register: mainpy_find
+
+    - name: "Choose | main_py_path (prefer */api/leadgen_api/main.py then */leadgen_api/main.py)"
+      ansible.builtin.set_fact:
+        main_py_path: >-
+          {{
+            (
+              (mainpy_find.files | map(attribute='path') | list)
+              | select('search', '/api/leadgen_api/main.py$')
+              | list
+              | first
+            )
+            | default(
+              (
+                (mainpy_find.files | map(attribute='path') | list)
+                | select('search', '/leadgen_api/main.py$')
+                | list
+                | first
+              )
+            )
+          }}
+
+    - name: "Assert | main_py_path discovered"
+      ansible.builtin.assert:
+        that:
+          - main_py_path is defined
+          - main_py_path | length > 0
+        fail_msg: "Could not locate leadgen_api/main.py under {{ leadgen_repo_root }}"
+
+    - name: "Deploy | main.py (Postgres-first persistence, queue-stub compatible)"
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../files/leadgen_api/main.py"
+        dest: "{{ main_py_path }}"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: "Build | rebuild LeadGen API image (no-cache)"
+      ansible.builtin.command:
+        argv:
+          - "{{ podman_bin }}"
+          - "build"
+          - "--no-cache"
+          - "-f"
+          - "{{ containerfile_path }}"
+          - "-t"
+          # MUST match /etc/systemd/system/motorcade-leadgen-api.service (LEADGEN_IMAGE)
+          - "localhost/motorcade-leadgen-api:wave1"
+          - "."
+      args:
+        chdir: "{{ build_context_dir }}"
+      register: build_out
+      changed_when: true
+
+    - name: "Restart | LeadGen API service"
+      ansible.builtin.systemd:
+        name: "{{ leadgen_service_name }}"
+        state: restarted
+        enabled: true
+      register: svc_restart
+
+    - name: "Wait | LeadGen API systemd unit active"
+      ansible.builtin.systemd:
+        name: "{{ leadgen_service_name }}"
+      register: svc_state
+      until: svc_state.status.ActiveState == "active"
+      retries: 20
+      delay: 1
+
+    - name: "Wait | LeadGen API port 8000 listening"
+      ansible.builtin.wait_for:
+        host: "127.0.0.1"
+        port: 8000
+        timeout: 30
+
+    - name: "Health | GET /lead/health (local)"
+      ansible.builtin.uri:
+        url: "{{ leadgen_base_url }}{{ leadgen_health_path }}"
+        method: GET
+        return_content: true
+        status_code: [200]
+      register: health
+
+    - name: "Parse | health json"
+      ansible.builtin.set_fact:
+        health_json: "{{ (health.content | default('{}') | from_json) }}"
+        health_queue: "{{ ((health.content | default('{}') | from_json).queue) | default('unknown') }}"
+
+    - name: "Show | health (safe)"
+      ansible.builtin.debug:
+        msg:
+          - "health_status={{ health.status }}"
+          - "health.queue={{ health_queue }}"
+          - "health_body={{ health.content | default('') }}"
+
+    - name: "DB Fix | ensure app.leads.payload jsonb column exists (idempotent)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ podman_bin }} exec -i {{ pg_container_name }} psql -U postgres -d {{ pg_db }} -v ON_ERROR_STOP=1 <<'SQL'
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema='app' AND table_name='leads' AND column_name='payload'
+          ) THEN
+            ALTER TABLE app.leads ADD COLUMN payload jsonb;
+          END IF;
+        END $$;
+        SQL
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: "Generate | idempotency key + unique email"
+      ansible.builtin.set_fact:
+        e2e_idempotency_key: "e2e_{{ 999999999 | random }}"
+        e2e_email: "e2e-{{ 999999999 | random }}@example.com"
+
+    - name: "Generate | lead intake payload (Wave3 schema; TX-only)"
+      ansible.builtin.set_fact:
+        intake_payload:
+          contact:
+            full_name: "E2E Test"
+            company: "Motorcade"
+            email: "{{ e2e_email }}"
+            phone: "+15555550123"
+            preferred_contact_method: "email"
+          request:
+            service_type: "armed_security"
+            timeline:
+              start_local: "{{ ansible_date_time.date }}"
+              end_local: "{{ ansible_date_time.date }}"
+            location:
+              city: "Houston"
+              state: "TX"
+          meta:
+            lead_source: "e2e"
+            consent_state: "server_draft"
+
+    - name: "Set | intake api key (from vault)"
+      ansible.builtin.set_fact:
+        intake_api_key: "{{ vault_leadgen_intake_api_key }}"
+
+    - name: "Intake | POST /lead/intake (capture status/body)"
+      ansible.builtin.uri:
+        url: "{{ leadgen_base_url }}{{ leadgen_intake_path }}"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+          X-API-Key: "{{ intake_api_key }}"
+          Idempotency-Key: "{{ e2e_idempotency_key }}"
+        body: "{{ intake_payload | to_json }}"
+        return_content: true
+        status_code: [200, 201, 202, 409, 422]
+      register: intake
+      failed_when: false
+
+    - name: "Show | intake result (safe)"
+      ansible.builtin.debug:
+        msg:
+          - "intake_status={{ intake.status }}"
+          - "email={{ e2e_email }}"
+          - "idempotency_key=<redacted>"
+          - "body_snip={{ (intake.content | default(''))[0:300] }}"
+
+    - name: "Assert | intake accepted (200/201/202/409) OR show 422"
+      ansible.builtin.fail:
+        msg: "Lead intake rejected (422). Fix payload schema. Body: {{ intake.content | default('') }}"
+      when: intake.status == 422
+
+    - name: "Assert | intake accepted (200/201/202/409)"
+      ansible.builtin.assert:
+        that:
+          - intake.status in [200, 201, 202, 409]
+        fail_msg: "Unexpected intake status={{ intake.status }} body={{ intake.content | default('') }}"
+
+    - name: "DB Query | poll for persistence (payload.contact.email)"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ podman_bin }} exec -i {{ pg_container_name }} psql -U postgres -d {{ pg_db }} -tA -F '|' -c "
+        SELECT
+          COALESCE((SELECT count(*) FROM app.leads WHERE payload->'contact'->>'email' = '{{ e2e_email }}'),0) AS c_email
+        ;
+        "
+      args:
+        executable: /bin/bash
+      register: persist_check
+      changed_when: false
+      until: (persist_check.stdout | trim | int) > 0
+      retries: "{{ persist_retries }}"
+      delay: "{{ persist_delay }}"
+
+    - name: "Diagnostics | show last 10 leads"
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ podman_bin }} exec -i {{ pg_container_name }} psql -U postgres -d {{ pg_db }} -x -c "SELECT id, created_at, payload->'contact'->>'email' AS email, left(payload::text,160) AS payload_snip FROM app.leads ORDER BY created_at DESC NULLS LAST LIMIT 10;"
+      args:
+        executable: /bin/bash
+      changed_when: false
