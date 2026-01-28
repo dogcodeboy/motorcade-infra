@@ -17,7 +17,7 @@
     # Git ref to deploy (detached).
     # Production stability rule: pin to the last-known-good ref that PASSed LEADGEN_07B.
     # Once the LeadGen fix is merged + tagged, update this to the release tag.
-    leadgen_git_ref: "leadgen-wave1-2026-01-28"
+    leadgen_git_ref: "leadgen-wave1-2026-01-28b"
 
     # Runtime
     leadgen_env_path: /etc/motorcade/leadgen.env
