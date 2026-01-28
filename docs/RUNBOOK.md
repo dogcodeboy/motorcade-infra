@@ -265,15 +265,17 @@ PLAT_19 — Governance Activation
        - `-e leadgen_git_ref=<release-tag-or-sha>`
 
 5. **LEADGEN_07C — Postgres-only async boundary (outbox queue + worker) (Authoritative PASS)**
+   - NOTE (2026-01-28): Playbook pin corrected to `leadgen-wave1-2026-01-28d` after initial drift to `...28c` caused API to rebuild from a ref that still contained a SyntaxError.
+
    - Playbook: `ansible/playbooks/LEADGEN_07C_wave4_postgres_outbox_async_boundary.yml`
    - Verified: **2026-01-28**
-   - Deploy ref (LeadGen app): tag `leadgen-wave1-2026-01-28c`
+   - Deploy ref (LeadGen app): tag `leadgen-wave1-2026-01-28d`
    - Adds durable queue table: `app.intake_jobs`
    - Contract:
      - `POST /lead/intake` returns **202** once job is enqueued (even if worker is stopped)
      - Worker drains queued jobs into `app.leads`
      - Idempotency enforced via `app.intake_jobs.idempotency_key` (unique) + payload match
-   - Checkpoint: `docs/checkpoints/2026-01-28_LEADGEN_07C_PASS/`
+   - Checkpoint: `docs/checkpoints/2026-01-28-LEADGEN_07C-PASS/`
 
 ### Notes
 
