@@ -1,0 +1,188 @@
+---
+- name: "LEADGEN_07 — Wave 3 persistence contract verification (202 Accepted == persisted in Postgres)"
+  hosts: motorcade-web-01
+  become: true
+  gather_facts: false
+
+  vars:
+    leadgen_base_url: "http://127.0.0.1:8000"
+    leadgen_health_path: "/lead/health"
+    leadgen_intake_path: "/lead/intake"
+
+    # Podman + Postgres (container-local exec)
+    podman_bin: "/usr/local/bin/podman"
+    pg_container_name: "motorcade-postgres"
+    pg_db_name: "motorcade"
+    leads_schema: "app"
+    leads_table: "leads"
+    db_verify_timeout_seconds: 90
+    db_verify_delay_seconds: 3
+
+  tasks:
+    - name: "Preflight | required vault key present (canonical preferred)"
+      ansible.builtin.assert:
+        that:
+          - "(vault_leadgen_api_key | default('')) | length > 0 or (vault_leadgen_intake_api_key | default('')) | length > 0"
+        fail_msg: "Missing vault_leadgen_api_key (preferred) or vault_leadgen_intake_api_key in vault.yml"
+
+    - name: "Set | e2e api key (canonical preferred)"
+      ansible.builtin.set_fact:
+        leadgen_e2e_api_key: "{{ vault_leadgen_api_key | default(vault_leadgen_intake_api_key) }}"
+
+    - name: "Preflight | podman present (non-standard install path)"
+      ansible.builtin.stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+      failed_when: not podman_stat.stat.exists
+
+    - name: "Health | wait for /lead/health (local)"
+      ansible.builtin.uri:
+        url: "{{ leadgen_base_url }}{{ leadgen_health_path }}"
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: 10
+      register: leadgen_health
+      retries: 12
+      delay: 2
+      until: leadgen_health.status == 200
+
+    - name: "Validate | health JSON status ok"
+      ansible.builtin.assert:
+        that:
+          - leadgen_health.json.status is defined
+          - leadgen_health.json.status == 'ok'
+        fail_msg: "Health JSON did not report status=ok"
+
+    - name: "Generate | idempotency key + unique email"
+      ansible.builtin.set_fact:
+        leadgen_idempotency_key: "{{ lookup('pipe', 'uuidgen') }}"
+        leadgen_unique_email: "e2e-{{ lookup('pipe', 'uuidgen') }}@example.com"
+
+    - name: "Generate | lead intake payload (TX-only; nested schema)"
+      ansible.builtin.set_fact:
+        leadgen_payload_v2:
+          contact:
+            full_name: "E2E Persistence Test"
+            email: "{{ leadgen_unique_email }}"
+            phone: "+15551234567"
+          request:
+            service_type: "armed_security"
+            timeline:
+              mode: "flexible"
+              start_local: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+            location:
+              city: "Houston"
+              state: "TX"
+            service_state: "TX"
+            service_city: "Houston"
+            requested_start_utc: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+            notes: "LEADGEN_07 persistence contract verify (TX-only; Postgres direct)"
+
+    - name: "Intake | POST /lead/intake (expects 202 Accepted)"
+      ansible.builtin.uri:
+        url: "{{ leadgen_base_url }}{{ leadgen_intake_path }}"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+          X-API-Key: "{{ leadgen_e2e_api_key }}"
+          Idempotency-Key: "{{ leadgen_idempotency_key }}"
+        body_format: json
+        body: "{{ leadgen_payload_v2 }}"
+        return_content: true
+        status_code:
+          - 200
+          - 201
+          - 202
+          - 409
+          - 422
+          - 500
+          - 503
+        timeout: 20
+      register: leadgen_intake_post
+      retries: 3
+      delay: 2
+      no_log: true
+
+    - name: "Assert | intake accepted (202) OR idempotent replay (200/201/202/409)"
+      ansible.builtin.assert:
+        that:
+          - leadgen_intake_post.status in [200, 201, 202, 409]
+        fail_msg: "Unexpected intake response status={{ leadgen_intake_post.status }}"
+
+    - name: "Optional wait | if API returned 202, give DB a moment before polling"
+      ansible.builtin.pause:
+        seconds: 2
+      when: leadgen_intake_post.status == 202
+
+    - name: "DB Verify | poll for lead row in Postgres (by unique email; up to {{ db_verify_timeout_seconds }}s)"
+      block:
+        - name: "DB Query | count rows in {{ leads_schema }}.{{ leads_table }} for unique email"
+          ansible.builtin.shell: |
+            set -euo pipefail
+            {{ podman_bin }} exec {{ pg_container_name }} psql -U postgres -d {{ pg_db_name }} -tAc \
+              "SELECT count(*) FROM {{ leads_schema }}.{{ leads_table }} WHERE email = '{{ leadgen_unique_email }}';"
+          register: leadgen_db_count
+          changed_when: false
+          retries: "{{ (db_verify_timeout_seconds // db_verify_delay_seconds) | int }}"
+          delay: "{{ db_verify_delay_seconds }}"
+          until: "(leadgen_db_count.stdout | trim | int) >= 1"
+
+      rescue:
+        - name: "Diagnostics | show intake status (safe)"
+          ansible.builtin.debug:
+            msg:
+              - "Intake status={{ leadgen_intake_post.status }}"
+              - "email={{ leadgen_unique_email }}"
+              - "idempotency_key={{ leadgen_idempotency_key }}"
+              - "db={{ pg_db_name }} container={{ pg_container_name }} table={{ leads_schema }}.{{ leads_table }}"
+              - "health={{ leadgen_health.json | default({}) }}"
+
+        - name: "Diagnostics | show candidate lead tables/columns (safe)"
+          ansible.builtin.shell: |
+            set -euo pipefail
+            {{ podman_bin }} exec {{ pg_container_name }} psql -U postgres -d {{ pg_db_name }} -v ON_ERROR_STOP=1 <<'SQL'
+            \\pset pager off
+            SELECT table_schema, table_name
+              FROM information_schema.tables
+             WHERE table_schema NOT IN ('pg_catalog','information_schema')
+               AND table_name ILIKE '%lead%'
+             ORDER BY table_schema, table_name
+             LIMIT 50;
+            SELECT table_schema, table_name, column_name, data_type
+              FROM information_schema.columns
+             WHERE column_name IN ('email','contact_email')
+               AND table_schema NOT IN ('pg_catalog','information_schema')
+             ORDER BY table_schema, table_name, column_name
+             LIMIT 200;
+            SQL
+          register: leadgen_diag_tables
+          changed_when: false
+          failed_when: false
+
+        - name: "Diagnostics | tail LeadGen API journal (safe)"
+          ansible.builtin.shell: |
+            set -euo pipefail
+            journalctl -u motorcade-leadgen-api.service -n 120 --no-pager || true
+          register: leadgen_api_journal
+          changed_when: false
+          failed_when: false
+
+        - name: "Diagnostics | emit collected outputs"
+          ansible.builtin.debug:
+            msg:
+              - "DB count last stdout={{ leadgen_db_count.stdout | default('') | trim }}"
+              - "Schema/table scan:\n{{ leadgen_diag_tables.stdout | default('') }}"
+              - "LeadGen API journal:\n{{ leadgen_api_journal.stdout | default('') }}"
+
+        - name: "Fail | persistence contract not satisfied within timeout"
+          ansible.builtin.fail:
+            msg: "Persistence contract failed: no DB row found for email={{ leadgen_unique_email }} within {{ db_verify_timeout_seconds }}s. Check diagnostics above."
+
+    - name: "Report | persistence contract verified (safe)"
+
+      ansible.builtin.debug:
+        msg:
+          - "LEADGEN_07 OK: intake accepted and persisted to Postgres."
+          - "email={{ leadgen_unique_email }}"
+          - "db_row_count={{ leadgen_db_count.stdout | trim }}"

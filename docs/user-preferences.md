@@ -31,7 +31,10 @@ to reflect new or refined preferences.
 
 - RUNBOOK.md is the authoritative operational document and must never lose content.
 - Updates to RUNBOOK.md must preserve structure and append new state clearly.
-- Session handoff text is provided **in chat** for copy/paste, not stored in the repo.
+- Session handoff text is provided **in chat** for copy/paste.
+- Additionally, when a playbook is updated (even if the run fails), include a small repo-tracked session note in a folder like:
+  - motorcade-infra/docs/session_updates/<YYYY-MM-DD>_<PLAYBOOK_ID>/SESSION_HANDOFF.md
+  - Include the playbook name, what changed, current failure state (if any), and the next exact command(s) to run.
 - Repo updates (docs/playbooks) are delivered as **merge-safe ZIPs**.
 
 ---
