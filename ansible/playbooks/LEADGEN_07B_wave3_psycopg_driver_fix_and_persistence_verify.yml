@@ -6,20 +6,21 @@
 
   vars:
     podman_bin: /usr/local/bin/podman
+
+    # Authoritative LeadGen working tree on target
+    leadgen_repo_dir: /opt/motorcade-leadgen
+
+    # Git ref to deploy (detached). Override via -e leadgen_git_ref=...
+    leadgen_git_ref: "origin/main"
+
+    # Runtime
     leadgen_env_path: /etc/motorcade/leadgen.env
-    leadgen_container_name: motorcade-leadgen-api
     leadgen_systemd_unit: motorcade-leadgen-api.service
     leadgen_expected_image: localhost/motorcade-leadgen-api:wave1
 
-    # Remote repo roots (server-side) we commonly use
-    leadgen_repo_root_candidates:
-      - /opt/motorcade-leadgen/app
-      - /opt/motorcade/leadgen/app
-      - /opt/motorcade-leadgen
-      - /opt/motorcade/leadgen
-
-    # Local file packaged with this playbook repo (motorcade-infra)
-    local_main_py: "{{ playbook_dir }}/../files/leadgen_api/main.py"
+    # Health / Intake
+    leadgen_health_url: "http://127.0.0.1:8000/lead/health"
+    leadgen_intake_url: "http://127.0.0.1:8000/lead/intake"
 
   tasks:
     - name: Preflight | podman present (non-standard install path)
@@ -33,290 +34,194 @@
           - podman_stat.stat.exists
           - podman_stat.stat.executable
 
-    - name: Discover | LeadGen repo root (first existing candidate)
+    - name: Assert | LeadGen repo dir exists on target
       stat:
-        path: "{{ item }}"
-      loop: "{{ leadgen_repo_root_candidates }}"
-      register: root_stats
+        path: "{{ leadgen_repo_dir }}"
+      register: leadgen_repo_stat
 
-    - name: Set | leadgen_repo_root
-      set_fact:
-        leadgen_repo_root: "{{ (root_stats.results | selectattr('stat.exists','equalto',true) | map(attribute='item') | list | first) | default('') }}"
-
-    - name: Assert | LeadGen repo root exists
+    - name: Assert | LeadGen repo dir present
       assert:
         that:
-          - leadgen_repo_root | length > 0
-        fail_msg: "Could not find LeadGen repo root on server. Checked: {{ leadgen_repo_root_candidates }}"
+          - leadgen_repo_stat.stat.exists
+          - leadgen_repo_stat.stat.isdir
 
-    - name: Show | leadgen_repo_root
-      debug:
-        msg: "leadgen_repo_root={{ leadgen_repo_root }}"
+    - name: Git | fetch latest refs (public repo)
+      command: git fetch --all --prune
+      args:
+        chdir: "{{ leadgen_repo_dir }}"
+      changed_when: false
 
-    - name: Discover | requirements.txt under LeadGen repo root
-      find:
-        paths: "{{ leadgen_repo_root }}"
-        patterns: "requirements.txt"
-        file_type: file
-        recurse: true
-      register: req_find
+    # Auto-clean (authoritative). Deployment workspace must not retain manual edits.
+    - name: Git | hard reset + clean (auto-clean; no drift)
+      shell: |
+        set -euo pipefail
+        git reset --hard
+        git clean -fd
+      args:
+        chdir: "{{ leadgen_repo_dir }}"
+      changed_when: true
 
-    - name: Assert | requirements.txt found
-      assert:
-        that:
-          - req_find.matched | int > 0
+    - name: Git | deploy requested ref (detached)
+      command: git checkout --detach "{{ leadgen_git_ref }}"
+      args:
+        chdir: "{{ leadgen_repo_dir }}"
+      changed_when: true
 
-    - name: Set | requirements_path (prefer */api/requirements.txt if present)
-      set_fact:
-        requirements_path: >-
-          {{
-            (
-              req_find.files
-              | map(attribute='path')
-              | select('search', '/api/requirements\\.txt$')
-              | list
-              | first
-            )
-            | default(req_find.files[0].path)
-          }}
+    - name: Git | hard reset to requested ref (no drift)
+      command: git reset --hard "{{ leadgen_git_ref }}"
+      args:
+        chdir: "{{ leadgen_repo_dir }}"
+      changed_when: true
 
-    - name: Read | requirements.txt (remote)
-      slurp:
-        src: "{{ requirements_path }}"
-      register: req_slurp
+    - name: Git | clean untracked after checkout (no drift)
+      command: git clean -fd
+      args:
+        chdir: "{{ leadgen_repo_dir }}"
+      changed_when: true
 
-    - name: Parse | requirements content
-      set_fact:
-        requirements_text: "{{ req_slurp.content | b64decode }}"
+    - name: Stat | app/api/Containerfile (preferred)
+      stat:
+        path: "{{ leadgen_repo_dir }}/app/api/Containerfile"
+      register: cf_app
 
-    - name: Check | Postgres driver present in requirements.txt?
-      set_fact:
-        # Use multiline regex so ^ matches each line; avoid embedding literal newlines in the pattern.
-        has_driver: "{{ (requirements_text | regex_search('^(psycopg(\\[binary\\])?)(==|$)|^(psycopg2)', multiline=True)) is not none }}"
+    - name: Stat | repo-root Containerfile (fallback)
+      stat:
+        path: "{{ leadgen_repo_dir }}/Containerfile"
+      register: cf_root
 
-    - name: Fix | add psycopg[binary] to requirements.txt when missing
-      lineinfile:
-        path: "{{ requirements_path }}"
-        line: "psycopg[binary]==3.2.1"
-        insertafter: EOF
-        state: present
-      when: not has_driver
-
-    - name: Discover | Containerfile/Dockerfile under LeadGen repo root
-      find:
-        paths: "{{ leadgen_repo_root }}"
-        patterns:
-          - Containerfile
-          - Dockerfile
-        file_type: file
-        recurse: true
-      register: cf_find
-
-    - name: Assert | build file found
-      assert:
-        that:
-          - cf_find.matched | int > 0
-
-    - name: Choose | containerfile_path (prefer */api/Containerfile then */api/Dockerfile else first)
+    - name: Set | containerfile_path + build_context_dir
       set_fact:
         containerfile_path: >-
           {{
-            (
-              cf_find.files
-              | map(attribute='path')
-              | select('search', '/api/Containerfile$')
-              | list
-              | first
-            )
-            | default(
-              (
-                cf_find.files
-                | map(attribute='path')
-                | select('search', '/api/Dockerfile$')
-                | list
-                | first
-              )
-            )
-            | default(cf_find.files[0].path)
+            (cf_app.stat.exists | ternary(leadgen_repo_dir ~ '/app/api/Containerfile', ''))
+            if (cf_app.stat.exists)
+            else (cf_root.stat.exists | ternary(leadgen_repo_dir ~ '/Containerfile', ''))
           }}
-
-    - name: Set | build_context_dir
-      set_fact:
-        build_context_dir: "{{ containerfile_path | dirname | dirname if (containerfile_path is search('/api/(Containerfile|Dockerfile)$')) else (containerfile_path | dirname) }}"
-
-    - name: Discover | leadgen_api main.py under LeadGen repo root
-      find:
-        paths: "{{ leadgen_repo_root }}"
-        patterns: "main.py"
-        file_type: file
-        recurse: true
-      register: main_find
-
-    - name: Choose | main_py_path (prefer */api/leadgen_api/main.py then */leadgen_api/main.py)
-      set_fact:
-        main_py_path: >-
+        build_context_dir: >-
           {{
-            (
-              main_find.files
-              | map(attribute='path')
-              | select('search', '/api/leadgen_api/main\\.py$')
-              | list
-              | first
-            )
-            | default(
-              (
-                main_find.files
-                | map(attribute='path')
-                | select('search', '/leadgen_api/main\\.py$')
-                | list
-                | first
-              )
-            )
-            | default('')
+            (cf_app.stat.exists | ternary(leadgen_repo_dir ~ '/app/api', leadgen_repo_dir))
           }}
 
-    - name: Assert | main_py_path discovered
+    - name: Assert | containerfile present
       assert:
         that:
-          - main_py_path | length > 0
-
-    - name: Assert | packaged main.py exists in motorcade-infra
-      delegate_to: localhost
-      run_once: true
-      stat:
-        path: "{{ local_main_py }}"
-      register: local_main_stat
-
-    - name: Assert | packaged main.py present
-      delegate_to: localhost
-      run_once: true
-      assert:
-        that:
-          - local_main_stat.stat.exists
-        fail_msg: "Expected {{ local_main_py }} to exist (zip/unzip path issue)."
-
-    - name: Deploy | main.py (psycopg jsonb-safe persistence)
-      copy:
-        src: "{{ local_main_py }}"
-        dest: "{{ main_py_path }}"
-        owner: root
-        group: root
-        mode: '0644'
-        backup: true
+          - containerfile_path | length > 0
+        fail_msg: "No Containerfile found at {{ leadgen_repo_dir }}/app/api/Containerfile or {{ leadgen_repo_dir }}/Containerfile"
 
     - name: Build | rebuild LeadGen API image (no-cache)
-      command: >-
+      command: >
         {{ podman_bin }} build --no-cache
         -f {{ containerfile_path }}
         -t {{ leadgen_expected_image }}
         {{ build_context_dir }}
+      changed_when: true
 
     - name: Restart | LeadGen API service
       systemd:
         name: "{{ leadgen_systemd_unit }}"
         state: restarted
-        daemon_reload: true
+        enabled: true
 
     - name: Wait | LeadGen API systemd unit active
       command: systemctl is-active "{{ leadgen_systemd_unit }}"
-      register: is_active
+      register: svc_active
       retries: 20
-      delay: 3
-      until: is_active.stdout.strip() == 'active'
+      delay: 1
+      until: svc_active.stdout.strip() == "active"
       changed_when: false
 
     - name: Wait | LeadGen API port 8000 listening
       wait_for:
         host: 127.0.0.1
         port: 8000
-        timeout: 60
+        timeout: 30
 
     - name: Health | GET /lead/health (local)
       uri:
-        url: "http://127.0.0.1:8000/lead/health"
+        url: "{{ leadgen_health_url }}"
         method: GET
         return_content: true
         status_code: 200
-      register: health
+      register: health_resp
 
     - name: Show | health (safe)
       debug:
         msg:
-          - "health_status={{ health.status }}"
-          - "health_body={{ health.content | to_json }}"
+          - "health_status={{ health_resp.status }}"
+          - "health_body={{ health_resp.content | to_json }}"
 
     - name: Generate | idempotency key + unique email
       set_fact:
-        e2e_key: "e2e_{{ 999999999 | random }}"
-        e2e_email: "e2e-{{ 999999999 | random }}@example.com"
+        e2e_idem: "e2e_{{ ansible_date_time.epoch }}"
+        e2e_email: "e2e-{{ ansible_date_time.epoch }}@example.com"
 
+    # FIX: payload must satisfy server schema; previous run failed 422 due to missing contact.full_name and request
     - name: Generate | lead intake payload (Wave3 schema; TX-only)
       set_fact:
         lead_payload:
-          schema: "wave3"
-          market: "TX"
           contact:
+            full_name: "E2E Test"
             name: "E2E Test"
             email: "{{ e2e_email }}"
             phone: "+12125550123"
-          service:
-            type: "guard"
-            hours: 10
-            armed: true
+          request:
+            service_type: "armed escort"
+            state: "TX"
+            notes: "E2E payload - schema-valid"
           meta:
-            source: "e2e"
-            idempotency_key: "{{ e2e_key }}"
+            source: "ansible-e2e"
+            idempotency_key: "{{ e2e_idem }}"
 
     - name: Set | intake api key (from env file)
-      shell: "set -euo pipefail; . {{ leadgen_env_path }}; echo ${LEADGEN_INTAKE_API_KEY:-}"
-      args:
-        executable: /bin/bash
-      register: intake_key
+      shell: |
+        set -euo pipefail
+        set -a
+        source "{{ leadgen_env_path }}"
+        set +a
+        printf "%s" "${LEADGEN_API_KEY:-}"
+      register: apikey_out
       changed_when: false
 
     - name: Assert | intake api key present
       assert:
         that:
-          - intake_key.stdout | length > 10
+          - (apikey_out.stdout | length) > 10
 
     - name: Intake | POST /lead/intake (capture status/body)
       uri:
-        url: "http://127.0.0.1:8000/lead/intake"
+        url: "{{ leadgen_intake_url }}"
         method: POST
         headers:
-          x-api-key: "{{ intake_key.stdout }}"
-          idempotency-key: "{{ e2e_key }}"
+          X-API-Key: "{{ apikey_out.stdout }}"
+          Content-Type: "application/json"
+          Idempotency-Key: "{{ e2e_idem }}"
         body_format: json
         body: "{{ lead_payload }}"
         return_content: true
         status_code: [200, 201, 202, 409, 422]
-      register: intake
+      register: intake_resp
 
     - name: Show | intake result (safe)
       debug:
         msg:
-          - "intake_status={{ intake.status }}"
+          - "intake_status={{ intake_resp.status }}"
           - "email={{ e2e_email }}"
           - "idempotency_key=<redacted>"
-          - "body_snip={{ (intake.content | default('') )[:240] }}"
+          - "body_snip={{ (intake_resp.content | default(''))[0:220] }}"
 
-    - name: Assert | intake accepted (200/201/202/409) OR show 422
+    - name: Assert | intake accepted (200/201/202/409)
       assert:
         that:
-          - intake.status in [200, 201, 202, 409, 422]
+          - intake_resp.status in [200, 201, 202, 409]
+        fail_msg: "Lead intake did not validate/accept. status={{ intake_resp.status }} body_snip={{ (intake_resp.content | default(''))[0:400] }}"
 
     - name: DB Verify | count rows and show newest
       shell: |
         set -euo pipefail
-        {{ podman_bin }} exec -i motorcade-postgres psql -U postgres -d motorcade -v ON_ERROR_STOP=1 <<'SQL'
-        select count(*) as lead_rows, max(created_at) as newest from app.leads;
-        SQL
-      args:
-        executable: /bin/bash
+        {{ podman_bin }} exec -i motorcade-postgres psql -U postgres -d motorcade -c "select count(*) as lead_rows, max(created_at) as newest from app.leads;"
       register: db_check
       changed_when: false
 
     - name: Show | DB check output
       debug:
         msg: "{{ db_check.stdout_lines }}"
-
