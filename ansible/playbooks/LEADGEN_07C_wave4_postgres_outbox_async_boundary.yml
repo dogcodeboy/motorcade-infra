@@ -13,7 +13,7 @@
     podman_log_max_size: "10m"
     podman_log_max_file: "3"
 
-    leadgen_tmp_dir: /var/lib/motorcade/leadgen/tmp
+    leadgen_tmp_dir: /opt/motorcade/leadgen/tmp
 
     # Authoritative LeadGen working tree on target
     leadgen_repo_dir: /opt/motorcade-leadgen
@@ -162,6 +162,14 @@
         END $$;
         SQL
       changed_when: false
+
+    - name: FS | ensure leadgen tmp dir exists (worker+api shared)
+      file:
+        path: "{{ leadgen_tmp_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
 
     - name: systemd | install motorcade-leadgen-worker.service
       copy:
