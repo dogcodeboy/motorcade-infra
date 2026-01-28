@@ -243,6 +243,25 @@ PLAT_19 — Governance Activation
    - Health (host): `http://127.0.0.1:8000/lead/health`
    - Health (public via Nginx): `https://motorcade.vip/api/lead/health`
 
+4. **LEADGEN_07B — Psycopg JSONB persistence + Wave 3 schema E2E verify (Authoritative PASS)**
+   - Playbook: `ansible/playbooks/LEADGEN_07B_wave3_psycopg_driver_fix_and_persistence_verify.yml`
+   - Verified: **2026-01-28**
+   - Deploy ref (LeadGen app): `44a9d47` (branch: `sync/server-leadgen-fixes-2026-01-27`)
+   - What was fixed (app-level, in `motorcade-leadgen`):
+     - Persisting request payload now uses psycopg3 JSON adapters (e.g., `Jsonb(...)`) so Postgres `jsonb` writes are deterministic (no “cannot adapt type 'dict'”).
+   - What was fixed (infra/test contract, in `motorcade-infra`):
+     - E2E payload updated to match current OpenAPI (`/lead/intake` requires `contact` + `request` with `timeline` + `location`).
+     - Service-area states are configurable (default `["TX"]`) so TX-only can expand later without code changes (admin console can manage this later).
+   - Verified outcomes (motorcade-web-01):
+     - `GET http://127.0.0.1:8000/lead/health` → `200 OK`
+     - `POST http://127.0.0.1:8000/lead/intake` → `202 Accepted` with `intake_id` + `request_id`
+     - Postgres durability check succeeds: `app.leads` row count increases; newest timestamp updates.
+
+   - **Pinning rule (production stability):**
+     - The playbook defaults `leadgen_git_ref: origin/main`. For deterministic deployments, run with:
+       - `-e leadgen_git_ref=44a9d47` (or a release tag once introduced).
+
+
 ### Notes
 
 - Vault hygiene: `vault_postgres_password` must exist **once** (no duplicate keys). If you see a duplicate-key warning, fix the encrypted vault file (keep the value that matches `/etc/motorcade/postgres.env` on the server).
@@ -257,24 +276,4 @@ PLAT_19 — Governance Activation
    - Verifies:
      - Insert into `app.leads` succeeds
      - Duplicate `Idempotency-Key` does not create a second row
-
-4. **LEADGEN_07B — Psycopg driver packaging + intake persistence contract confirmation (Wave 3 schema)**
-   - Playbook: `ansible/playbooks/LEADGEN_07B_wave3_psycopg_driver_fix_and_persistence_verify.yml`
-   - Status: **PARTIAL (verified build + intake accept). Persistence contract confirmed; queue gate removed.**
-   - What was fixed:
-     - Rebuild now runs cleanly under static Podman install (argv-safe build invocation).
-     - Corrected **Wave 3 intake payload schema** (fields: `contact.full_name`, `request.service_type`, `request.timeline`, `request.location`).
-     - Build context corrected so `COPY requirements.txt` resolves correctly.
-     - `psycopg[binary]` ensured in the LeadGen requirements (idempotent).
-   - What we observed (authoritative):
-     - `GET /lead/health` returns `queue=stub` currently.
-     - `POST /lead/intake` returns `202 Accepted` and logs `lead_intake_accepted`.
-     - Postgres schema includes `app.leads.payload jsonb` and idempotency unique index (partial).
-   - **Durability contract (LOCKED):**
-     - `POST /lead/intake` must be **durable to Postgres** before returning success (`200/201/202/409`).
-     - Queue/worker is **optional** and must never gate persistence verification.
-     - Redis may be used for rate-limit/cache/async enrichment later, but **writes are to Postgres**.
-   - Next:
-     - Create next playbook to **verify persistence by querying Postgres** for `idempotency_key` / `request_id` written by intake.
-     - If `queue=stub` is intentional, keep it; but enforce that accept == persisted.
 
