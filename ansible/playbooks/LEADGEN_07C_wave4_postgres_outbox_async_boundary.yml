@@ -19,7 +19,7 @@
     leadgen_repo_dir: /opt/motorcade-leadgen
 
     # Pin to the release tag created when this change is merged.
-    leadgen_git_ref: "leadgen-wave1-2026-01-28c"
+    leadgen_git_ref: "leadgen-wave1-2026-01-28d"
 
     # Runtime
     leadgen_env_path: /etc/motorcade/leadgen.env
