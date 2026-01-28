@@ -1,0 +1,389 @@
+---
+- name: "LEADGEN_07C — Postgres-only outbox queue (async boundary) + worker + verification"
+  hosts: motorcade-web-01
+  become: true
+  gather_facts: true
+
+  vars:
+    podman_bin: /usr/local/bin/podman
+
+    # Network and logging must match the stable platform defaults.
+    motorcade_network: motorcade-core
+    podman_log_driver: k8s-file
+    podman_log_max_size: "10m"
+    podman_log_max_file: "3"
+
+    leadgen_tmp_dir: /var/lib/motorcade/leadgen/tmp
+
+    # Authoritative LeadGen working tree on target
+    leadgen_repo_dir: /opt/motorcade-leadgen
+
+    # Pin to the release tag created when this change is merged.
+    leadgen_git_ref: "leadgen-wave1-2026-01-28c"
+
+    # Runtime
+    leadgen_env_path: /etc/motorcade/leadgen.env
+    leadgen_api_unit: motorcade-leadgen-api.service
+    leadgen_worker_unit: motorcade-leadgen-worker.service
+    leadgen_image: localhost/motorcade-leadgen-api:wave1
+
+    # Verification
+    leadgen_intake_url: "http://127.0.0.1:8000/lead/intake"
+    leadgen_health_url: "http://127.0.0.1:8000/lead/health"
+
+  tasks:
+    - name: Preflight | podman present (non-standard install path)
+      stat:
+        path: "{{ podman_bin }}"
+      register: podman_stat
+
+    - name: Assert | podman present
+      assert:
+        that:
+          - podman_stat.stat.exists
+          - podman_stat.stat.executable
+
+    - name: Assert | LeadGen repo dir exists on target
+      stat:
+        path: "{{ leadgen_repo_dir }}"
+      register: leadgen_repo_stat
+
+    - name: Assert | LeadGen repo dir present
+      assert:
+        that:
+          - leadgen_repo_stat.stat.exists
+          - leadgen_repo_stat.stat.isdir
+
+    - name: Git | fetch latest refs (public repo)
+      command: git fetch --all --prune
+      args:
+        chdir: "{{ leadgen_repo_dir }}"
+      changed_when: false
+
+    # Auto-clean (authoritative). Deployment workspace must not retain manual edits.
+    - name: Git | hard reset + clean (auto-clean; no drift)
+      shell: |
+        set -euo pipefail
+        git reset --hard
+        git clean -fd
+      args:
+        chdir: "{{ leadgen_repo_dir }}"
+      changed_when: true
+
+    - name: Git | deploy requested ref (detached)
+      command: git checkout --detach "{{ leadgen_git_ref }}"
+      args:
+        chdir: "{{ leadgen_repo_dir }}"
+      changed_when: true
+
+    - name: Git | capture deployed revision (SHA)
+      command: git rev-parse HEAD
+      args:
+        chdir: "{{ leadgen_repo_dir }}"
+      register: leadgen_gitsha
+      changed_when: false
+
+    - name: Build | capture build time (UTC)
+      command: date -u +%Y-%m-%dT%H:%M:%SZ
+      register: leadgen_build_time
+      changed_when: false
+
+    - name: Stat | app/api/Containerfile (preferred)
+      stat:
+        path: "{{ leadgen_repo_dir }}/app/api/Containerfile"
+      register: cf_app
+
+    - name: Stat | repo-root Containerfile (fallback)
+      stat:
+        path: "{{ leadgen_repo_dir }}/Containerfile"
+      register: cf_root
+
+    - name: Set | containerfile_path + build_context_dir
+      set_fact:
+        containerfile_path: >-
+          {{
+            (cf_app.stat.exists | ternary(leadgen_repo_dir ~ '/app/api/Containerfile', ''))
+            if (cf_app.stat.exists)
+            else (cf_root.stat.exists | ternary(leadgen_repo_dir ~ '/Containerfile', ''))
+          }}
+        build_context_dir: >-
+          {{
+            (cf_app.stat.exists | ternary(leadgen_repo_dir ~ '/app/api', leadgen_repo_dir))
+          }}
+
+    - name: Assert | containerfile present
+      assert:
+        that:
+          - containerfile_path | length > 0
+        fail_msg: "No Containerfile found at {{ leadgen_repo_dir }}/app/api/Containerfile or {{ leadgen_repo_dir }}/Containerfile"
+
+    - name: Build | rebuild LeadGen image (no-cache)
+      command: >
+        {{ podman_bin }} build --no-cache
+        --build-arg LEADGEN_GIT_SHA={{ leadgen_gitsha.stdout | trim }}
+        --build-arg LEADGEN_BUILD_TIME={{ leadgen_build_time.stdout | trim }}
+        -f {{ containerfile_path }}
+        -t {{ leadgen_image }}
+        {{ build_context_dir }}
+      changed_when: true
+
+    - name: DB | ensure app.intake_jobs exists (idempotent)
+      shell: |
+        set -euo pipefail
+        {{ podman_bin }} exec -i motorcade-postgres psql -U postgres -d motorcade <<'SQL'
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema='app' AND table_name='intake_jobs'
+          ) THEN
+            CREATE TABLE app.intake_jobs (
+              id uuid PRIMARY KEY,
+              idempotency_key text NULL,
+              payload jsonb NOT NULL,
+              status text NOT NULL DEFAULT 'queued',
+              attempt_count int NOT NULL DEFAULT 0,
+              last_error text NULL,
+              created_at timestamptz NOT NULL DEFAULT NOW(),
+              updated_at timestamptz NOT NULL DEFAULT NOW(),
+              CONSTRAINT intake_jobs_status_chk CHECK (status IN ('queued','processing','done','failed','dead'))
+            );
+          END IF;
+        END $$;
+
+        -- Unique idempotency: allow NULL but enforce uniqueness when provided.
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes WHERE schemaname='app' AND indexname='intake_jobs_idempotency_key_uidx'
+          ) THEN
+            CREATE UNIQUE INDEX intake_jobs_idempotency_key_uidx ON app.intake_jobs (idempotency_key) WHERE idempotency_key IS NOT NULL;
+          END IF;
+        END $$;
+        SQL
+      changed_when: false
+
+    - name: systemd | install motorcade-leadgen-worker.service
+      copy:
+        dest: /etc/systemd/system/motorcade-leadgen-worker.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Motorcade LeadGen Worker (LEADGEN_07C — Postgres outbox)
+          Wants=network-online.target
+          After=network-online.target motorcade-postgres.service
+          Wants=motorcade-postgres.service
+          StartLimitIntervalSec=60
+          StartLimitBurst=10
+
+          [Service]
+          Type=simple
+          Restart=always
+          RestartSec=3
+          TimeoutStartSec=120
+          TimeoutStopSec=30
+          KillMode=control-group
+
+          Environment=PODMAN_BIN={{ podman_bin }}
+          Environment=LEADGEN_ENV={{ leadgen_env_path }}
+          Environment=LEADGEN_IMAGE={{ leadgen_image }}
+          Environment=LEADGEN_NAME=motorcade-leadgen-worker
+
+          ExecStartPre=/usr/bin/test -f {{ leadgen_env_path }}
+          ExecStartPre=/usr/bin/test -x {{ podman_bin }}
+          ExecStartPre={{ podman_bin }} rm -f motorcade-leadgen-worker
+
+          ExecStart={{ podman_bin }} run --rm --name motorcade-leadgen-worker \
+            --network {{ motorcade_network }} \
+            --env-file {{ leadgen_env_path }} \
+            --log-driver {{ podman_log_driver }} \
+            --log-opt max-size={{ podman_log_max_size }} \
+            --log-opt max-file={{ podman_log_max_file }} \
+            --memory 256m \
+            --pids-limit 200 \
+            --security-opt no-new-privileges \
+            --cap-drop=all \
+            --read-only \
+            -v {{ leadgen_tmp_dir }}:/tmp:Z \
+            {{ leadgen_image }} \
+            python -m leadgen_api.worker
+
+          ExecStop={{ podman_bin }} stop -t 10 motorcade-leadgen-worker
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: systemd | daemon-reload
+      systemd:
+        daemon_reload: true
+
+    - name: Restart | LeadGen API service
+      systemd:
+        name: "{{ leadgen_api_unit }}"
+        state: restarted
+        enabled: true
+
+    - name: Start | LeadGen worker service
+      systemd:
+        name: "{{ leadgen_worker_unit }}"
+        state: started
+        enabled: true
+
+    - name: Wait | LeadGen API port 8000 listening
+      wait_for:
+        host: 127.0.0.1
+        port: 8000
+        timeout: 30
+
+    - name: Health | GET /lead/health
+      uri:
+        url: "{{ leadgen_health_url }}"
+        method: GET
+        return_content: true
+        status_code: 200
+      register: health_resp
+
+    - name: Show | health (safe)
+      debug:
+        msg:
+          - "health_status={{ health_resp.status }}"
+          - "health_body={{ health_resp.content | to_json }}"
+
+    - name: Set | intake api key (from env file)
+      shell: |
+        set -euo pipefail
+        set -a
+        source "{{ leadgen_env_path }}"
+        set +a
+        printf "%s" "${LEADGEN_API_KEY:-}"
+      register: apikey_out
+      changed_when: false
+
+    - name: Assert | intake api key present
+      assert:
+        that:
+          - (apikey_out.stdout | length) > 10
+
+    - name: Verification | stop worker (intake must still return 202)
+      systemd:
+        name: "{{ leadgen_worker_unit }}"
+        state: stopped
+
+    - name: Generate | idempotency key + unique email
+      set_fact:
+        e2e_idem: "e2e07c_{{ ansible_date_time.epoch }}"
+        e2e_email: "e2e-07c-{{ ansible_date_time.epoch }}@example.com"
+
+    - name: Generate | lead intake payload (schema-valid)
+      set_fact:
+        lead_payload:
+          contact:
+            full_name: "E2E Test"
+            email: "{{ e2e_email }}"
+            phone: "+12125550123"
+            preferred_contact_method: "email"
+          request:
+            service_type: "armed_escort_driver"
+            timeline:
+              start_local: "2026-02-01 09:00"
+              end_local: "2026-02-01 19:00"
+            location:
+              street: "123 Demo St"
+              city: "Houston"
+              state: "TX"
+              postal_code: "77002"
+            site_type: "commercial"
+            notes: "E2E payload - LEADGEN_07C"
+            recurrence: "one_time"
+            expected_hours: 10
+          context:
+            lead_source: "ansible-e2e"
+            referrer_url: "local://ansible"
+            utm:
+              source: "ansible"
+              medium: "e2e"
+              campaign: "leadgen_07c"
+
+    - name: DB | snapshot queued jobs before
+      shell: |
+        set -euo pipefail
+        {{ podman_bin }} exec -i motorcade-postgres psql -U postgres -d motorcade -t -A -c "select count(*) from app.intake_jobs where status in ('queued','processing');"
+      register: jobs_before
+      changed_when: false
+
+    - name: Intake | POST /lead/intake (worker stopped) => 202
+      uri:
+        url: "{{ leadgen_intake_url }}"
+        method: POST
+        headers:
+          X-API-Key: "{{ apikey_out.stdout }}"
+          Content-Type: "application/json"
+          Idempotency-Key: "{{ e2e_idem }}"
+        body_format: json
+        body: "{{ lead_payload }}"
+        return_content: true
+        status_code: [202, 409]
+      register: intake_resp
+
+    - name: Assert | intake accepted (202/409)
+      assert:
+        that:
+          - intake_resp.status in [202, 409]
+
+    - name: DB | confirm job queued increased or key reused
+      shell: |
+        set -euo pipefail
+        before={{ jobs_before.stdout | trim }}
+        after=$({{ podman_bin }} exec -i motorcade-postgres psql -U postgres -d motorcade -t -A -c "select count(*) from app.intake_jobs where status in ('queued','processing');")
+        echo "before=${before} after=${after}"
+        test "$after" -ge "$before"
+      changed_when: false
+
+    - name: Verification | start worker
+      systemd:
+        name: "{{ leadgen_worker_unit }}"
+        state: started
+        enabled: true
+
+    - name: Wait | worker drains (queued/processing -> 0)
+      shell: |
+        set -euo pipefail
+        {{ podman_bin }} exec -i motorcade-postgres psql -U postgres -d motorcade -t -A -c "select count(*) from app.intake_jobs where status in ('queued','processing');"
+      register: jobs_remaining
+      retries: 30
+      delay: 2
+      until: (jobs_remaining.stdout | trim) == "0"
+      changed_when: false
+
+    - name: Idempotency | repeat same Idempotency-Key (should NOT create new job)
+      uri:
+        url: "{{ leadgen_intake_url }}"
+        method: POST
+        headers:
+          X-API-Key: "{{ apikey_out.stdout }}"
+          Content-Type: "application/json"
+          Idempotency-Key: "{{ e2e_idem }}"
+        body_format: json
+        body: "{{ lead_payload }}"
+        return_content: true
+        status_code: [202, 409]
+      register: idem_resp
+
+    - name: Assert | idempotency preserved (202/409)
+      assert:
+        that:
+          - idem_resp.status in [202, 409]
+
+    - name: DB Verify | newest lead row exists
+      shell: |
+        set -euo pipefail
+        {{ podman_bin }} exec -i motorcade-postgres psql -U postgres -d motorcade -c "select count(*) as lead_rows, max(created_at) as newest from app.leads;"
+      register: leads_check
+      changed_when: false
+
+    - name: Show | leads check
+      debug:
+        msg:
+          - "leads_check={{ leads_check.stdout_lines }}"

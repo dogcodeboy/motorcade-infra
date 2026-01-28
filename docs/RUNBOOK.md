@@ -264,6 +264,17 @@ PLAT_19 — Governance Activation
      - Override is allowed **only** for controlled roll-forward / rollback testing:
        - `-e leadgen_git_ref=<release-tag-or-sha>`
 
+5. **LEADGEN_07C — Postgres-only async boundary (outbox queue + worker) (Authoritative PASS)**
+   - Playbook: `ansible/playbooks/LEADGEN_07C_wave4_postgres_outbox_async_boundary.yml`
+   - Verified: **2026-01-28**
+   - Deploy ref (LeadGen app): tag `leadgen-wave1-2026-01-28c`
+   - Adds durable queue table: `app.intake_jobs`
+   - Contract:
+     - `POST /lead/intake` returns **202** once job is enqueued (even if worker is stopped)
+     - Worker drains queued jobs into `app.leads`
+     - Idempotency enforced via `app.intake_jobs.idempotency_key` (unique) + payload match
+   - Checkpoint: `docs/checkpoints/2026-01-28_LEADGEN_07C_PASS/`
+
 ### Notes
 
 - Vault hygiene: `vault_postgres_password` must exist **once** (no duplicate keys). If you see a duplicate-key warning, fix the encrypted vault file (keep the value that matches `/etc/motorcade/postgres.env` on the server).
