@@ -14,8 +14,10 @@
     # Authoritative LeadGen working tree on target
     leadgen_repo_dir: /opt/motorcade-leadgen
 
-    # Git ref to deploy (detached). Override via -e leadgen_git_ref=...
-    leadgen_git_ref: "origin/main"
+    # Git ref to deploy (detached).
+    # Production stability rule: pin to the last-known-good ref that PASSed LEADGEN_07B.
+    # Once the LeadGen fix is merged + tagged, update this to the release tag.
+    leadgen_git_ref: "leadgen-wave1-2026-01-28"
 
     # Runtime
     leadgen_env_path: /etc/motorcade/leadgen.env
@@ -83,6 +85,18 @@
         chdir: "{{ leadgen_repo_dir }}"
       changed_when: true
 
+    - name: Git | capture deployed revision (SHA)
+      command: git rev-parse HEAD
+      args:
+        chdir: "{{ leadgen_repo_dir }}"
+      register: leadgen_gitsha
+      changed_when: false
+
+    - name: Build | capture build time (UTC)
+      command: date -u +%Y-%m-%dT%H:%M:%SZ
+      register: leadgen_build_time
+      changed_when: false
+
     - name: Stat | app/api/Containerfile (preferred)
       stat:
         path: "{{ leadgen_repo_dir }}/app/api/Containerfile"
@@ -115,6 +129,8 @@
     - name: Build | rebuild LeadGen API image (no-cache)
       command: >
         {{ podman_bin }} build --no-cache
+        --build-arg LEADGEN_GIT_SHA={{ leadgen_gitsha.stdout | trim }}
+        --build-arg LEADGEN_BUILD_TIME={{ leadgen_build_time.stdout | trim }}
         -f {{ containerfile_path }}
         -t {{ leadgen_expected_image }}
         {{ build_context_dir }}
