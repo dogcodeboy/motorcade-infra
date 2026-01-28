@@ -148,12 +148,14 @@ This document is the **single source of truth** for build/deploy order across al
    - Checkpoint: `docs/checkpoints/2026-01-28_LEADGEN_07C_PASS/`
    
 
-26. 🟩 `PLAT_09A_public_site_completion.yml` (to be created; repo: `motorcade.vip`)
+26. 🟨 `PLAT_09A_public_site_completion.yml` (to be created; repo: `motorcade.vip`)
    - Scope: finalize all public pages (no placeholders) + fix global layout/responsiveness
    - Completion: desktop/tablet/mobile verified; no horizontal overflow; services menu complete (EP moved under Services)
-27. 🟩 `PLAT_09B_leadgen_wordpress_bridge_finalization.yml` (to be created; repo: `motorcade-infra` + `motorcade.vip`)
+27. 🟨 `PLAT_09B_leadgen_wordpress_bridge_finalization.yml` (to be created; repo: `motorcade-infra` + `motorcade.vip`)
    - Scope: complete WordPress → LeadGen API bridge and validate end-to-end intake flow
    - Completion: test submission from Contact/Assessment form produces LeadGen record; no 5xx; logs documented
+   
+   🟨 LEADGEN_08 (Optional)
 
 ### Identity (SSO / directory)
 28. 🟨 `ID_01_keycloak_bootstrap.yml`
