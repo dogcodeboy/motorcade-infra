@@ -1,14 +1,15 @@
-# 🧾 SITE THEME — External Archive Manifest
+# SITE THEME ARCHIVE MANIFEST (Append-only)
 
-This manifest records what was moved out of the repos during `site_01`.
+This file records which large, legacy site-theme artifacts were moved OUTSIDE the repos to keep `Repos.zip` uploads small.
 
-## Archive root
+## External archive location (authoritative)
 `~/Repos/Archives/motorcade/site-theme-legacy/`
 
-## Moves (fill during execution)
-- [ ] `motorcade.vip/ansible/files/wp/themes/motorcade-trust-theme.zip` → `<archive>/...`
-- [ ] `motorcade.vip/ansible/files/wp/themes/motorcade-trust-live_*.tar.gz` → `<archive>/...`
+## Entries
 
-## Notes
-- Archive operations are **move-out + git remove**, never delete.
-- Keep directory structure intact inside the archive.
+- 2026-01-29 — `motorcade-trust-theme.zip` (~25MB) — moved out of `motorcade.vip/ansible/files/wp/themes/`
+- 2026-01-29 — `motorcade-trust-live_20260128T125828Z.tar.gz` (~27MB) — moved out of `motorcade.vip/ansible/files/wp/themes/`
+- 2026-01-29 — `motorcade-trust-theme-live.tar.gz` (~18MB) — moved out of `motorcade.vip/ansible/`
+
+## Git maintenance notes
+- 2026-01-29 — `git gc --prune=now --aggressive` run on `motorcade.vip` (local maintenance; no history rewrite).
