@@ -149,6 +149,9 @@ This document is the **single source of truth** for build/deploy order across al
    
 
 26. 🟨 `PLAT_09A_public_site_completion.yml` (to be created; repo: `motorcade.vip`)
+    # 🔗 PLAT_09A — Site Theme Runbook (Authoritative)
+   - GitHub:
+    - https://github.com/dogcodeboy/motorcade-infra/blob/main/docs/runbooks/SITE_THEME_RUNBOOK.md
    - Scope: finalize all public pages (no placeholders) + fix global layout/responsiveness
    - Completion: desktop/tablet/mobile verified; no horizontal overflow; services menu complete (EP moved under Services)
 27. 🟨 `PLAT_09B_leadgen_wordpress_bridge_finalization.yml` (to be created; repo: `motorcade-infra` + `motorcade.vip`)
