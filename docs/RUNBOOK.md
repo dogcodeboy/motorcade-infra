@@ -160,42 +160,29 @@ This document is the **single source of truth** for build/deploy order across al
    
    🟨 LEADGEN_08 (Optional)
 
-### Identity (SSO / directory)
-28. 🟨 `ID_01_keycloak_bootstrap.yml`
-29. 🟨 `ID_02_freeipa_directory.yml`
-30. 🟨 `ID_03_service_accounts_and_rbac.yml`
 
-### Mail/Calendar (groupware)
-31. 🟨 `MAIL_01_mailcow_deploy.yml`
-32. 🟨 `MAIL_02_imap_migrate.yml`
-33. 🟨 `MAIL_03_branding.yml`
+### Admin AI (Authoritative Control Plane)
+28. 🟨 `ADMINAI_00_admin_ai_authoritative_control_plane.yml` (to be created; repo: `motorcade-infra`)
+   - **Authoritative:** Admin AI replaces and supersedes steps **28–38** in full (identity, service accounts/RBAC, mail/calendar, DNS/domain connect, client portal governance, and the control-plane enforcement/reconciliation layer).
+   - Includes **installs + execution + reconciliation + enforcement** required for Admin AI to function.
+   - Governance sources of truth (append-only):
+     - `docs/runbook-attachments/STEP_ADMIN_AI_EMAIL_GOVERNANCE.md`
+     - `docs/runbook-attachments/STEP_ADMIN_AI_LDAP_GOVERNANCE.md`
+     - `docs/runbook-attachments/STEP_ADMIN_AI_DNS_DOMAIN_CONNECT.md`
+     - `docs/runbook-attachments/STEP_CLIENT_PORTAL_MULTI_SITE_GOVERNANCE.md`
+     - `docs/runbook-attachments/STEP_ADMIN_AI_OPEN_QUESTIONS.md`
 
-🟦 BUSINESS PLATFORM
-34. 🟨 PLAT_10 — Identity Foundation (SSO + Email)
-35. 🟨 PLAT_11 — Employee Backend Service
-    -Guards
-    -Supervisors
-    -Fatigue rules
+29. 🟥 (Superseded by Step 28 Admin AI) — previously: `ID_01_keycloak_bootstrap.yml`
+30. 🟥 (Superseded by Step 28 Admin AI) — previously: `ID_02_freeipa_directory.yml`
+31. 🟥 (Superseded by Step 28 Admin AI) — previously: `ID_03_service_accounts_and_rbac.yml`
+32. 🟥 (Superseded by Step 28 Admin AI) — previously: `MAIL_01_mailcow_deploy.yml`
+33. 🟥 (Superseded by Step 28 Admin AI) — previously: `MAIL_02_imap_migrate.yml`
+34. 🟥 (Superseded by Step 28 Admin AI) — previously: `MAIL_03_branding.yml`
+35. 🟥 (Superseded by Step 28 Admin AI) — previously: `PLAT_10 — Identity Foundation (SSO + Email)`
+36. 🟥 (Superseded by Step 28 Admin AI) — previously: `PLAT_11 — Employee Backend Service`
+37. 🟥 (Superseded by Step 28 Admin AI) — previously: `PLAT_12 — Admin Panel (Control Plane MVP)`
+38. 🟥 (Superseded by Step 28 Admin AI) — previously: `PLAT_13 — Client & Contract Operations`
 
-36. 🟨 PLAT_12 — Admin Panel (Control Plane MVP)
-   - Admin AI Authority & Control Plane
-    -See: docs/admin-ai/ADMIN_AI_RECONSTRUCTION_AND_SCOPE.md (authoritative)
-    -Authority is defined here; implementation is explicitly deferred (append-only).
-   - Config
-   - Overrides
-   - Kill switches
-
-37. 🟨 PLAT_13 — Client & Contract Operations
-    -Contracts
-    -SLAs
-    -Assignments
-
-38. 🟨 PLAT_14 — Billing Operations
-    -Invoicing
-    -Payroll
-    -Client authorization
-
-🟦 GOVERNANCE & LEGAL
 39. 🟨 PLAT_15 — Audit & Evidence Foundations
     -Chain of custody
     -Evidence vault
