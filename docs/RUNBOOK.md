@@ -178,9 +178,11 @@ This document is the **single source of truth** for build/deploy order across al
     -Fatigue rules
 
 36. 🟨 PLAT_12 — Admin Panel (Control Plane MVP)
-    -Config
-    -Overrides
-    -Kill switches
+   - Admin AI Authority & Control Plane
+    -See: docs/admin-ai/ADMIN_AI_RECONSTRUCTION_AND_SCOPE.md (authoritative)
+   - Config
+   - Overrides
+   - Kill switches
 
 37. 🟨 PLAT_13 — Client & Contract Operations
     -Contracts
