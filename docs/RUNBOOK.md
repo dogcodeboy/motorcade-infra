@@ -180,6 +180,7 @@ This document is the **single source of truth** for build/deploy order across al
 36. 🟨 PLAT_12 — Admin Panel (Control Plane MVP)
    - Admin AI Authority & Control Plane
     -See: docs/admin-ai/ADMIN_AI_RECONSTRUCTION_AND_SCOPE.md (authoritative)
+    -Authority is defined here; implementation is explicitly deferred (append-only).
    - Config
    - Overrides
    - Kill switches
