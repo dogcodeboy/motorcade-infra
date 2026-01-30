@@ -11,7 +11,7 @@ It defines authority only and prevents operational churn.
 
 ## 2. Authority Model
 Admin AI is the authoritative control plane for identity, directory intent, infrastructure policy decisions, and cross-environment coordination.
-Admin AI acts as an operator, not hands.
+Admin AI acts as an operator (decision + authorization), not a human replacing toolchains.
 
 ## 3. Environment Separation
 ### Staging
@@ -19,18 +19,24 @@ Near-unlimited authority with guardrails.
 
 ### Production
 Policy-gated authority.
-Reversible infrastructure elasticity actions (scale up/down) may auto-approve within pre-approved budgets and instance classes.
-Structural or identity changes require explicit approval.
 
-## 4. Human Control
-Admin AI recommends and authorizes; humans approve and execute.
+**Autonomous (policy-bound) actions**
+- Reversible infrastructure elasticity actions (scale up/down) may be **auto-approved and executed** within pre-approved budgets, instance classes, and safety rails.
+- Admin AI may assume pre-approved cloud IAM roles to carry out these policy-bound actions.
+
+**Approval-required actions**
+- Structural directory changes, identity lifecycle changes, and any action outside the approved policy envelope require explicit human approval.
+
+## 4. Human Control (No churn)
+Admin AI may autonomously execute **only** the “Autonomous (policy-bound) actions” above.
+For everything else, Admin AI recommends and stages a change plan; a human approves and triggers execution.
 
 ## 5. Identity Separation
 Employee and client identities are strictly separated.
 
 ## 6. Cloud & Infrastructure Authority
-Admin AI may authorize scale-up/scale-down within constraints.
-Numeric limits remain undecided.
+Admin AI may authorize (and, where policy allows, execute) scale-up/scale-down within constraints.
+Numeric caps and boundary values remain undecided until explicitly set.
 
 ## 7. Explicit Non-Decisions
 Caps, approval rules, rollback strategies, and logging requirements are undecided.
