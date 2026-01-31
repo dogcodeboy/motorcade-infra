@@ -2,7 +2,8 @@
 body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 
 :root{
-  --services-overlap: clamp(180px, 22vw, 280px);
+  --services-overlap: clamp(240px, 28vw, 340px);
+  --content-gutter: clamp(24px, 5vw, 120px);
 }
 
 /* ===== HERO ===== */
@@ -65,7 +66,9 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   z-index: 5;
   width: 100%;
   max-width: 1180px;
-  margin: 0 auto;
+  margin-left: var(--content-gutter);
+  margin-right: auto;
+  width: calc(100% - var(--content-gutter));
   padding: clamp(56px, 8vw, 84px) clamp(22px, 4vw, 28px) clamp(120px, 12vw, 160px);
   display: grid;
   grid-template-columns: 1.15fr 0.85fr;
@@ -88,17 +91,17 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 
 .hero p.subhead,
 .hero .hero-sub{
-  font-size: clamp(13px, 1.3vw, 15px);
+  font-size: clamp(19px, 2vw, 23px);
   font-weight: 500;
-  opacity: 0.95;
+  opacity: 0.98;
   margin: 0 0 clamp(10px, 1.4vw, 12px);
   text-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
 }
 
 .hero .hero-body{
-  font-size: clamp(12px, 1.1vw, 13.5px);
-  line-height: 1.65;
-  color: rgba(255, 255, 255, 0.85);
+  font-size: clamp(18px, 1.8vw, 20px);
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.92);
   max-width: clamp(260px, 30vw, 400px);
   margin: 0 0 clamp(16px, 2vw, 22px);
 }
@@ -182,26 +185,22 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   left:0;
   right:0;
   bottom:0;
-  top: calc(var(--services-overlap) * 1.25);
-  background:
-    linear-gradient(180deg,
-      rgba(248,250,255,0) 0%,
-      rgba(248,250,255,0) 50%,
-      rgba(248,250,255,0.45) 72%,
-      rgba(248,250,255,0.9) 100%),
-    linear-gradient(110deg,
-      rgba(248,250,255,0.75) 0%,
-      rgba(248,250,255,0.6) 45%,
-      rgba(248,250,255,0.28) 70%,
-      rgba(248,250,255,0) 100%);
+  top: 0;
+  background: linear-gradient(90deg,
+    rgba(255,255,255,0.92) 0%,
+    rgba(255,255,255,0.75) 42%,
+    rgba(255,255,255,0.35) 72%,
+    rgba(255,255,255,0) 100%);
   z-index:0;
+  pointer-events:none;
 }
 
 .services .section-inner{
-  padding-top: calc(var(--services-overlap) * 0.02);
+  padding-top: clamp(8px, 1.4vw, 16px);
   z-index: 6;
-  margin-left: clamp(24px, 5vw, 120px);
+  margin-left: var(--content-gutter);
   margin-right: auto;
+  width: calc(100% - var(--content-gutter));
 }
 
 .services .section-title{

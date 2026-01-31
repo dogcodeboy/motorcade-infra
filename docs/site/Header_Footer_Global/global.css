@@ -1,21 +1,31 @@
+:root{
+  --header-logo-size: clamp(40px, 5vw, 63px);
+  --header-brand-size: clamp(16px, 1.6vw, 24px);
+  --header-sub-size: clamp(10px, 1.1vw, 16px);
+  --nav-font-size: clamp(13px, 0.8vw + 7px, 19px);
+  --nav-gap: clamp(12px, 1.6vw, 22px);
+}
+
 .site-header{
   background:#ffffff;
   border-bottom:1px solid #e5e7eb;
 }
 
 .header-inner{
-  max-width:1200px;
+  max-width:2560px;
   margin:0 auto;
-  padding:16px 24px;
-  display:flex;
+  padding:clamp(16px, 2vw, 24px) clamp(36px, 6vw, 80px);
+  display:grid;
+  grid-template-columns:auto 1fr auto;
+  grid-template-areas:"brand nav cta";
   align-items:center;
-  justify-content:space-between;
+  column-gap:clamp(16px, 2vw, 28px);
 }
 
 .logo{
-  height:36px;
+  height:var(--header-logo-size);
   width:auto;
-  max-width:220px;
+  max-width:clamp(260px, 22vw, 385px);
   object-fit:contain;
 }
 
@@ -23,6 +33,7 @@
   display:flex;
   align-items:center;
   gap:12px;
+  grid-area:brand;
 }
 
 .brand-text{
@@ -34,46 +45,53 @@
 .brand-name{
   font-weight:700;
   letter-spacing:0.12em;
-  font-size:14px;
+  font-size:var(--header-brand-size);
   color:#0f172a;
 }
 
 .brand-sub{
-  font-size:9px;
-  letter-spacing:0.35em;
+  font-size:var(--header-sub-size);
+  letter-spacing:clamp(0.18em, 0.22em, 0.28em);
   color:#64748b;
-}
-
-.nav > a{
-  margin-left:24px;
-  text-decoration:none;
-  color:#1f2937;
-  font-weight:500;
-  font-size:12px;
-  text-transform:uppercase;
-  letter-spacing:0.08em;
 }
 
 .nav{
   display:flex;
   align-items:center;
+  justify-content:center;
+  gap:var(--nav-gap);
+  flex-wrap:nowrap;
+  min-width:0;
+  grid-area:nav;
+}
+
+.nav > a{
+  margin:0;
+  text-decoration:none;
+  color:#1f2937;
+  font-weight:500;
+  font-size:var(--nav-font-size);
+  text-transform:uppercase;
+  letter-spacing:0.06em;
+  white-space:nowrap;
 }
 
 .nav-item{
   position:relative;
-  margin-left:24px;
+  margin:0;
 }
 
 .nav-item .nav-link{
   text-decoration:none;
   color:#1f2937;
   font-weight:500;
-  font-size:12px;
+  font-size:var(--nav-font-size);
   text-transform:uppercase;
-  letter-spacing:0.08em;
+  letter-spacing:0.06em;
   display:inline-flex;
   align-items:center;
   gap:6px;
+  white-space:nowrap;
 }
 
 .nav-item .nav-link::after{
@@ -106,9 +124,11 @@
   padding:8px 16px;
   margin:0;
   color:#1f2937;
-  font-size:12px;
+  font-size:calc(var(--nav-font-size) * 0.9);
   letter-spacing:0.02em;
   text-transform:none;
+  text-decoration:none;
+  white-space:nowrap;
 }
 
 .submenu a:hover{
@@ -130,6 +150,10 @@
   font-size:11px;
   letter-spacing:0.08em;
   text-transform:uppercase;
+  text-decoration:none;
+  display:inline-flex;
+  align-items:center;
+  white-space:nowrap;
 }
 
 .nav a.nav-cta{
@@ -140,6 +164,151 @@
   background:#2563eb;
   border-color:#2563eb;
   color:#ffffff;
+}
+
+.header-cta{
+  grid-area:cta;
+  justify-self:end;
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+
+.nav-toggle{
+  display:none;
+  align-items:center;
+  justify-content:center;
+  width:38px;
+  height:38px;
+  padding:0;
+  border-radius:999px;
+  border:1px solid rgba(37, 99, 235, 0.45);
+  background:#ffffff;
+  box-shadow:0 6px 14px rgba(37, 99, 235, 0.12);
+  cursor:pointer;
+}
+
+.nav-toggle-bar{
+  position:relative;
+  display:block;
+  width:18px;
+  height:2px;
+  background:#2f5aa8;
+  border-radius:2px;
+}
+
+.nav-toggle-bar::before,
+.nav-toggle-bar::after{
+  content:"";
+  position:absolute;
+  left:0;
+  width:100%;
+  height:100%;
+  background:#2f5aa8;
+  border-radius:2px;
+  transition:transform 0.2s ease, opacity 0.2s ease;
+}
+
+.nav-toggle-bar::before{
+  transform:translateY(-6px);
+}
+
+.nav-toggle-bar::after{
+  transform:translateY(6px);
+}
+
+.site-header.menu-open .nav-toggle-bar{
+  background:transparent;
+}
+
+.site-header.menu-open .nav-toggle-bar::before{
+  transform:rotate(45deg);
+}
+
+.site-header.menu-open .nav-toggle-bar::after{
+  transform:rotate(-45deg);
+}
+
+.sr-only{
+  position:absolute;
+  width:1px;
+  height:1px;
+  padding:0;
+  margin:-1px;
+  overflow:hidden;
+  clip:rect(0, 0, 0, 0);
+  white-space:nowrap;
+  border:0;
+}
+
+@media (max-width: 1280px){
+  .site-header{
+    --header-logo-size: clamp(34px, 4.4vw, 54px);
+    --header-brand-size: clamp(14px, 1.2vw, 20px);
+    --header-sub-size: clamp(9px, 0.9vw, 14px);
+    --nav-font-size: clamp(12px, 0.7vw + 6px, 17px);
+    --nav-gap: clamp(10px, 1vw, 16px);
+  }
+
+  .header-inner{
+    padding:clamp(12px, 1.6vw, 18px) clamp(16px, 4vw, 48px);
+    column-gap:clamp(12px, 1.4vw, 20px);
+  }
+
+  .nav-cta{
+    padding:7px 14px;
+    font-size:10px;
+  }
+}
+
+@media (max-width: 980px){
+  .header-inner{
+    grid-template-columns:1fr auto;
+    grid-template-areas:
+      "brand cta"
+      "nav nav";
+    row-gap:12px;
+  }
+
+  .nav-toggle{
+    display:inline-flex;
+  }
+
+  .nav{
+    display:none;
+    width:100%;
+    flex-direction:column;
+    align-items:flex-start;
+    gap:12px;
+    padding:6px 0 4px;
+  }
+
+  .site-header.menu-open .nav{
+    display:flex;
+  }
+
+  .nav-item .submenu{
+    position:static;
+    margin-top:8px;
+    border-radius:10px;
+    box-shadow:none;
+  }
+}
+
+@media (max-width: 760px){
+  .header-inner{
+    grid-template-columns:1fr;
+    grid-template-areas:
+      "brand"
+      "cta"
+      "nav";
+    row-gap:10px;
+    padding:clamp(14px, 4vw, 18px) clamp(18px, 5vw, 32px);
+  }
+
+  .header-cta{
+    justify-self:start;
+  }
 }
 
 .site-footer{
