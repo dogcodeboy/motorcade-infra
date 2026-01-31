@@ -1,0 +1,17 @@
+# Podman runtime settings (Motorcade)
+#
+# IMPORTANT:
+# - Podman on target servers is installed as a standalone/static install (NOT via dnf).
+# - Therefore, dnf/package manager will not track Podman and playbooks MUST NOT attempt
+#   to install/upgrade Podman with dnf/yum/package modules.
+# - Use motorcade_podman_bin (locked path) and preflight checks to fail fast if missing.
+#
+# Default locked path used across Motorcade hosts:
+motorcade_podman_bin: "/usr/local/bin/podman"
+
+# Optional candidates (future-proof) if you ever decide to auto-detect instead of locking.
+# Keep motorcade_podman_bin as the authoritative default unless governance changes.
+motorcade_podman_candidate_paths:
+  - "/usr/local/bin/podman"
+  - "/usr/bin/podman"
+  - "/bin/podman"
