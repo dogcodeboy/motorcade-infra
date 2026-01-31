@@ -14,6 +14,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   align-items: stretch;
   overflow: visible;
   background-color: #e9f0fb;
+  z-index: 2;
 }
 
 /* The actual photo */
@@ -178,7 +179,6 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   position:relative;
   background: transparent;
   margin-top: calc(-1 * var(--services-overlap));
-  z-index: 4;
 }
 
 .services::before{
@@ -191,7 +191,8 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   background:
     linear-gradient(180deg,
       rgba(248,250,255,0) 0%,
-      rgba(248,250,255,0.65) 32%,
+      rgba(248,250,255,0) 35%,
+      rgba(248,250,255,0.65) 55%,
       rgba(248,250,255,0.95) 100%),
     linear-gradient(110deg,
       rgba(248,250,255,0.95) 0%,
@@ -202,7 +203,8 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 }
 
 .services .section-inner{
-  padding-top: clamp(112px, 12vw, 140px);
+  padding-top: calc(var(--services-overlap) + 16px);
+  z-index: 6;
 }
 
 .service-icon-grid{
