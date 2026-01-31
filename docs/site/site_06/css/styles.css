@@ -12,6 +12,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   min-height: clamp(520px, 60vw, 760px);
   aspect-ratio: 3 / 2;
   display: flex;
+  flex-direction: column;
   align-items: stretch;
   overflow: visible;
   background-color: #e9f0fb;
@@ -175,7 +176,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 .services{
   position:relative;
   background: transparent;
-  margin-top: calc(-1 * var(--services-overlap));
+  margin-top: calc(.5 * var(--services-overlap));
   z-index:3;
 }
 
@@ -187,16 +188,17 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   bottom:0;
   top: 0;
   background: linear-gradient(90deg,
-    rgba(255,255,255,0.92) 0%,
-    rgba(255,255,255,0.75) 42%,
-    rgba(255,255,255,0.35) 72%,
+    rgba(255,255,255,0.9) 0%,
+    rgba(255,255,255,0.7) 32%,
+    rgba(255,255,255,0.35) 52%,
+    rgba(255,255,255,0) 68%,
     rgba(255,255,255,0) 100%);
   z-index:0;
   pointer-events:none;
 }
 
 .services .section-inner{
-  padding-top: clamp(8px, 1.4vw, 16px);
+  padding-top: clamp(30px, 1.4vw, 16px);
   z-index: 6;
   margin-left: var(--content-gutter);
   margin-right: auto;

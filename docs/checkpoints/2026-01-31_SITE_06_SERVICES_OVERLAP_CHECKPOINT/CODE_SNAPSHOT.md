@@ -1,3 +1,9 @@
+# CODE SNAPSHOT — SITE_06 — Services overlap + hero wave blend checkpoint
+
+This file captures the HTML/CSS state as pasted in chat so we can recover if the editor drifts.
+
+## index.html (snapshot)
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -43,44 +49,47 @@
         </p>
 
         <div class="hero-actions">
-          <a class="btn-primary" href="#contact">Request A security Assessment</a>
+          <a class="btn-primary" href="#contact">Schedule Appointment</a>
         </div>
       </div>
 
     </div>
+  </section>
 
-    <section class="services" id="services">
-      <div class="section-inner">
-        <h2 class="section-title">Experienced Protection Services</h2>
-        <p class="section-lead">
-          Motorcade Security Solutions offers a range of specialized protection services tailored to meet the unique
-          needs of our clientele.
-        </p>
+  <section class="services" id="services">
+    <div class="section-inner">
+      <h2 class="section-title">Experienced Protection Services</h2>
+      <p class="section-lead">
+        Motorcade Security Solutions offers a range of specialized protection services tailored to meet the unique
+        needs of our clientele.
+      </p>
 
-        <div class="service-icon-grid">
-          <article class="service-icon-card">
-            <div class="icon-square">
-              <img src="assets/icons/icon-armed.svg" alt="">
-            </div>
-            <h3>Armed Security</h3>
-          </article>
+      <div class="service-icon-grid">
+        <article class="service-icon-card">
+          <div class="icon-square">
+            <img src="assets/icons/icon-armed.svg" alt="">
+          </div>
+          <h3>Armed Security</h3>
+          <p>Uniformed officers protecting people, property, and sensitive locations.</p>
+        </article>
 
-          <article class="service-icon-card">
-            <div class="icon-square">
-              <img src="assets/icons/icon-briefcase.svg" alt="">
-            </div>
-            <h3>Executive Protection</h3>
-          </article>
+        <article class="service-icon-card">
+          <div class="icon-square">
+            <img src="assets/icons/icon-briefcase.svg" alt="">
+          </div>
+          <h3>Executive Protection</h3>
+          <p>Discreet, plain-clothes protection for executives, families, and travel.</p>
+        </article>
 
-          <article class="service-icon-card">
-            <div class="icon-square">
-              <img src="assets/icons/icon-route.svg" alt="">
-            </div>
-            <h3>Escort &amp; Convoy</h3>
-          </article>
-        </div>
+        <article class="service-icon-card">
+          <div class="icon-square">
+            <img src="assets/icons/icon-route.svg" alt="">
+          </div>
+          <h3>Escort &amp; Convoy</h3>
+          <p>Coordinated, secure movement for high-profile and high-value assets.</p>
+        </article>
       </div>
-    </section>
+    </div>
   </section>
 
   <section class="audience" id="audience">
@@ -152,3 +161,68 @@
 <script src="../Header_Footer_Global/global.js" defer></script>
 </body>
 </html>
+
+styles.css (snapshot)
+
+height:100%;
+object-fit:contain;
+object-fit:cover;
+object-position:center bottom;
+bottom: calc(-1 * var(--services-overlap));
+height: calc(var(--services-overlap) + clamp(120px, 12vw, 180px));
+height: calc(var(--services-overlap) + clamp(160px, 16vw, 240px));
+background: url("../assets/images/wave.png") 58% 100% / 135% auto no-repeat;
+opacity:0.82;
+-webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.18) 28%, rgba(0,0,0,0.6) 58%, rgba(0,0,0,1) 100%);
+mask-image: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.18) 28%, rgba(0,0,0,0.6) 58%, rgba(0,0,0,1) 100%);
+opacity:0.78;
+-webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.08) 36%, rgba(0,0,0,0.5) 65%, rgba(0,0,0,1) 100%);
+mask-image: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.08) 36%, rgba(0,0,0,0.5) 65%, rgba(0,0,0,1) 100%);
+z-index:2;
+margin-top: calc(-1 * var(--services-overlap));
+z-index:3;
+}
+.services .section-inner{
+  padding-top: calc(var(--services-overlap) + 16px);
+  padding-top: calc(var(--services-overlap) * 0.36);
+  z-index: 6;
+
+NOTE: This CSS snapshot reflects the conflicting/duplicated declarations pasted in chat, which is part of the problem we must clean up.
+
+
+---
+
+### 9) `docs/checkpoints/2026-01-31_SITE_06_SERVICES_OVERLAP_CHECKPOINT/CODEX_TASK_PROMPT.md`
+```md
+# CODEX TASK PROMPT — SITE_06 — Services overlap + hero wave blend checkpoint
+
+Paste into Codex EXACTLY:
+
+---
+You are working in repo: `motorcade-infra`
+
+Edit ONLY these files:
+- `docs/site/site_06/index.html`
+- `docs/site/site_06/css/styles.css`
+
+Goal:
+Make the SITE_06 “Services” section match the intended reference layout (hero + services overlap composition):
+
+1) Hero photo must look full-bleed and not appear uniformly blue-washed.
+2) Left gradient exists for text contrast only; it should fade out by ~70–80% width.
+3) The bottom hero wave + soft white lift must blend hero into services as ONE composition.
+4) The Services title (“Experienced Protection Services”), its lead text, and the 3 service cards must sit inside that overlap/lift region (lower third of hero), not in a detached flat band.
+5) The “Who We Secure” (Audience) section must begin below the cards and must not be affected by hero/services overlays.
+
+Rules:
+- No stubs. No TODOs.
+- Do not redesign typography/palette/copy.
+- Remove duplicated/conflicting overlap CSS and choose ONE clean overlap model.
+- Mobile must collapse naturally without collisions or huge gaps.
+
+Deliverables:
+- Provide exact diffs for both files.
+- Explain the chosen layering model (positioning + z-index) in 5–10 bullets.
+- Provide a verification checklist for desktop/tablet/mobile.
+
+---
