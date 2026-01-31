@@ -17,6 +17,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   overflow: visible;
   background-color: #e9f0fb;
   z-index: 2;
+  padding-bottom: clamp(200px, 20vw, 280px);
 }
 
 /* The actual photo */
@@ -66,24 +67,24 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   position: relative;
   z-index: 5;
   width: 100%;
-  max-width: 1180px;
+  max-width: 1400px;
   margin-left: var(--content-gutter);
   margin-right: auto;
   width: calc(100% - var(--content-gutter));
-  padding: clamp(56px, 8vw, 84px) clamp(22px, 4vw, 28px) clamp(120px, 12vw, 160px);
+  padding: clamp(56px, 8vw, 84px) clamp(22px, 4vw, 28px) clamp(180px, 18vw, 220px);
   display: grid;
-  grid-template-columns: 1.15fr 0.85fr;
+  grid-template-columns: 1.4fr 0.6fr;
   gap: 24px;
 }
 
 .hero .hero-left {
   color: #fff;
-  max-width: clamp(300px, 36vw, 480px);
+  max-width: clamp(540px, 60vw, 900px);
   width: 100%;
 }
 
 .hero h1 {
-  font-size: clamp(32px, 3.8vw, 50px);
+  font-size: calc(clamp(32px, 3.8vw, 50px) * 1.5);
   line-height: 1.12;
   letter-spacing: -0.005em;
   margin: 0 0 clamp(10px, 1.6vw, 16px);
@@ -92,7 +93,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 
 .hero p.subhead,
 .hero .hero-sub{
-  font-size: clamp(19px, 2vw, 23px);
+  font-size: calc(clamp(19px, 2vw, 23px) * 1.5);
   font-weight: 500;
   opacity: 0.98;
   margin: 0 0 clamp(10px, 1.4vw, 12px);
@@ -100,10 +101,10 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 }
 
 .hero .hero-body{
-  font-size: clamp(18px, 1.8vw, 20px);
+  font-size: calc(clamp(18px, 1.8vw, 20px) * 1.5);
   line-height: 1.7;
   color: rgba(255, 255, 255, 0.92);
-  max-width: clamp(260px, 30vw, 400px);
+  max-width: clamp(480px, 60vw, 900px);
   margin: 0 0 clamp(16px, 2vw, 22px);
 }
 
@@ -124,7 +125,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   color:#2f5aa8;
   text-decoration:none;
   font-weight:600;
-  font-size:clamp(10.5px, 1vw, 12px);
+  font-size:calc(clamp(10.5px, 1vw, 12px) * 2.25);
   letter-spacing:0.06em;
   text-transform:uppercase;
   box-shadow:0 8px 16px rgba(37, 99, 235, 0.18);
@@ -150,7 +151,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 .section-inner{
   max-width:1180px;
   margin:0 auto;
-  padding:72px 24px;
+  padding:72px 50px;
   position:relative;
   z-index:1;
 }
@@ -176,8 +177,12 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 .services{
   position:relative;
   background: transparent;
-  margin-top: calc(.5 * var(--services-overlap));
-  z-index:3;
+  margin-top: 0;
+  z-index:6;
+  position:absolute;
+  left:0;
+  right:0;
+  bottom: 0;
 }
 
 .services::before{
@@ -198,7 +203,8 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 }
 
 .services .section-inner{
-  padding-top: clamp(30px, 1.4vw, 16px);
+  padding-top: 0;
+  padding-bottom: 0;
   z-index: 6;
   margin-left: var(--content-gutter);
   margin-right: auto;
@@ -207,6 +213,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 
 .services .section-title{
   text-align:left;
+  font-size: clamp(26px,3vw,38px);
 }
 
 .services .section-lead{
@@ -214,6 +221,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   margin-left:0;
   margin-right:auto;
   max-width:520px;
+  font-size:14px;
 }
 
 .services .service-icon-grid{
@@ -420,7 +428,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   }
 
   .hero .hero-left{
-    max-width: 560px;
+    max-width: 700px;
   }
 
   .hero-actions{
