@@ -8,9 +8,8 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   aspect-ratio: 3 / 2;
   display: flex;
   align-items: stretch;
-  overflow: hidden;
+  overflow: visible;
   background-color: #e9f0fb;
-  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
 }
 
 /* The actual photo */
@@ -47,22 +46,24 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   z-index: 1;
 }
 
-/* Bottom mist overlay (the missing “legs overlay”) */
-.hero .hero-mist {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -6px;
-  height: 160px;
-  background: url("../assets/images/mist_overlay.png") center bottom / cover no-repeat;
-  opacity: 0.7;
-  z-index: 2;
-  pointer-events: none;
+/* Bottom wave overlay to blend hero into the next section */
+.hero .hero-wave{
+  position:absolute;
+  left:0;
+  right:0;
+  bottom: clamp(-180px, -16vw, -120px);
+  height: clamp(240px, 26vw, 340px);
+  background: url("../assets/images/wave.png") 58% 100% / 135% auto no-repeat;
+  opacity:0.82;
+  -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.18) 28%, rgba(0,0,0,0.6) 58%, rgba(0,0,0,1) 100%);
+  mask-image: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.18) 28%, rgba(0,0,0,0.6) 58%, rgba(0,0,0,1) 100%);
+  z-index:2;
+  pointer-events:none;
 }
 
 .hero .hero-inner {
   position: relative;
-  z-index: 3;
+  z-index: 5;
   width: 100%;
   max-width: 1180px;
   margin: 0 auto;
@@ -171,8 +172,8 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 
 .services{
   position:relative;
-  background:#f5f7fb url("../assets/images/wave_clean.png") center/cover no-repeat;
-  margin-top: clamp(-140px, -12vw, -90px);
+  background: transparent;
+  margin-top: clamp(-220px, -18vw, -140px);
   z-index: 4;
 }
 
@@ -180,7 +181,21 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   content:"";
   position:absolute;
   inset:0;
-  background:rgba(248,250,255,0.84);
+  background:
+    linear-gradient(110deg,
+      rgba(248,250,255,0.95) 0%,
+      rgba(248,250,255,0.88) 45%,
+      rgba(248,250,255,0.55) 70%,
+      rgba(248,250,255,0) 100%),
+    linear-gradient(180deg,
+      rgba(248,250,255,0) 0%,
+      rgba(248,250,255,0.6) 30%,
+      rgba(248,250,255,0.95) 100%);
+  z-index:0;
+}
+
+.services .section-inner{
+  padding-top: clamp(112px, 12vw, 140px);
 }
 
 .service-icon-grid{
@@ -260,6 +275,7 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   position:absolute;
   inset:0;
   background:rgba(255,255,255,0.86);
+  z-index:0;
 }
 
 .audience-inner{
@@ -286,21 +302,15 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   font-weight:500;
 }
 
-.audience-icon{
-  width:64px;
-  height:64px;
+.audience-photo{
+  width:72px;
+  height:72px;
   border-radius:18px;
+  object-fit:cover;
   background:#ffffff;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  box-shadow:0 12px 24px rgba(15,23,42,0.1);
+  box-shadow:0 12px 24px rgba(15,23,42,0.12);
   border:1px solid rgba(148,163,184,0.25);
-}
-
-.audience-icon img{
-  width:34px;
-  height:34px;
+  filter: grayscale(0.4) saturate(0.75) hue-rotate(200deg) brightness(1.05);
 }
 
 .apart-list{
@@ -338,19 +348,21 @@ body{font-family:"Montserrat","Segoe UI",Roboto,Helvetica,Arial,sans-serif}
   color:#475569;
 }
 
+/* Footer override (site_06 only): no wave background */
+.site-footer{
+  background-image:none;
+  background-color:#162543;
+}
+
 /* Mobile */
 @media (max-width: 760px){
   .hero{ min-height: 560px; }
   .hero h1{ font-size: 40px; }
   .hero-left{ padding: 52px 0; }
-  .hero-bg{
-    background:
-      linear-gradient(180deg,
-        rgba(31,95,191,.92) 0%,
-        rgba(31,95,191,.62) 48%,
-        rgba(31,95,191,.15) 70%,
-        rgba(31,95,191,.00) 100%),
-      url("../assets/images/hero-motorcade.png") center / cover no-repeat;
+  .hero .hero-wave{
+    height: 190px;
+    bottom: -110px;
+    background-size: 150% auto;
   }
 
   .section-inner{ padding:56px 20px; }
