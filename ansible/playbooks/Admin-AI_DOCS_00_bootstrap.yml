@@ -1,0 +1,27 @@
+---
+- name: Admin-AI docs bootstrap (copies only)
+  hosts: localhost
+  gather_facts: false
+  vars:
+    repo_root: "{{ lookup('env','PWD') }}"
+    admin_dir: "{{ repo_root }}/docs/Admin-AI"
+  tasks:
+    - name: Ensure Admin-AI doc directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ admin_dir }}"
+        - "{{ admin_dir }}/services"
+        - "{{ admin_dir }}/diagrams"
+        - "{{ admin_dir }}/references/runbook-attachments"
+        - "{{ admin_dir }}/references/checkpoints"
+
+    - name: Run bootstrap script (copies references; sources unchanged)
+      command: "{{ repo_root }}/tools/admin-ai/bootstrap_admin_ai_docs.sh {{ repo_root }}"
+      register: out
+      changed_when: false
+
+    - debug:
+        msg: "{{ out.stdout }}"

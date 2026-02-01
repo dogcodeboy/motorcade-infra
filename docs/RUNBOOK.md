@@ -163,6 +163,9 @@ This document is the **single source of truth** for build/deploy order across al
 
 ### Admin AI (Authoritative Control Plane)
 28. 🟨 `ADMINAI_00_admin_ai_authoritative_control_plane.yml` (to be created; repo: `motorcade-infra`)
+   - **Runbook:** `docs/Admin-AI/ADMIN-AI_RUNBOOK.md` (master step sequence: Admin-AI_01+, SSO_*, LDAP_*, Email_*, DNS_*, etc.)
+   - **Governance:** `docs/runbook-attachments/ADMIN_AI_GOVERNANCE_COMPLETE.md`
+   - **Intent lock:** `docs/checkpoints/2026-01-30_ADMIN_AI_AUTOSCALING_INTENT_LOCK/`
    - **Authoritative:** Admin AI replaces and supersedes steps **28–38** in full (identity, service accounts/RBAC, mail/calendar, DNS/domain connect, client portal governance, and the control-plane enforcement/reconciliation layer).
    - Includes **installs + execution + reconciliation + enforcement** required for Admin AI to function.
    - Governance sources of truth (append-only):

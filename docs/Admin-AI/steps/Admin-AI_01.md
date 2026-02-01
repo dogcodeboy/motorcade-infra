@@ -1,0 +1,41 @@
+# 🟨 01 — Admin-AI_01
+## Admin-AI container bootstrap (live + staging lanes)
+
+### Goal
+- Admin-AI container bootstrap (live + staging lanes)
+
+### Preconditions
+- Admin-AI remains running at all times (staging lane exists to avoid downtime).
+- Changes start in **staging** and only reach **live** via explicit promotion.
+- If facts are stale or anything is ambiguous: **halt** and document the refusal.
+
+### Step-by-step procedure
+1. Read the Primary/authoritative document(s) below and extract the non-negotiables for this step.
+1. Define the exact outputs (configs, intent records, accounts, policies) this step will produce.
+1. Execute the step in **staging** first; record verification evidence.
+1. If staging passes, prepare a promotion record and apply to **live** (if this step is live-impacting).
+1. Write an audit entry referencing the produced artifacts and verification evidence.
+1. Create the canonical state root `/opt/admin-ai/` with `staging/` and `live/` subtrees (each with config/authority/intent/facts/memory/logs).
+1. Install/verify Podman standalone binary path on the host (do not use dnf).
+1. Deploy Admin-AI container as a system-managed service with automatic restart.
+1. Validate: both lanes can write audit entries; execution remains gated/disabled by default.
+
+### Outputs
+- Documented artifacts for this step (intent/config/policy), stored in-repo and referenced by path.
+- Verification evidence captured and referenced in audit trail.
+
+### Verification checklist
+- Staging behavior verified and logged.
+- Live impact occurs only via explicit promotion (if applicable).
+- Audit write succeeded for the step and references outputs/evidence.
+
+### Rollback
+- Revert the specific intent/config artifact(s) produced by this step.
+- Document rollback as an auditable event.
+- Do **not** stop Admin-AI; use staging lane to remediate safely.
+
+### Required documents
+- **Primary / authoritative:** [`docs/checkpoints/2026-01-30_ADMIN_AI_AUTOSCALING_INTENT_LOCK/`](docs/checkpoints/2026-01-30_ADMIN_AI_AUTOSCALING_INTENT_LOCK/)
+- Supporting: [`docs/Admin-AI/ADMIN-AI_RUNBOOK.md`](docs/Admin-AI/ADMIN-AI_RUNBOOK.md)
+- Supporting: [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
+- Supporting: [`docs/runbook-attachments/ADMIN_AI_GOVERNANCE_COMPLETE.md`](docs/runbook-attachments/ADMIN_AI_GOVERNANCE_COMPLETE.md)
